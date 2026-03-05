@@ -82,6 +82,53 @@
   #status.connected { color: #4ade80; }
   #status.reconnecting { color: #fbbf24; }
   #status.error { color: #ff5555; }
+
+  #stream-stats {
+    position: fixed;
+    bottom: 10px;
+    left: 12px;
+    font-size: 0.72rem;
+    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+    background: rgba(0,0,0,0.65);
+    color: #aaa;
+    padding: 5px 10px;
+    border-radius: 4px;
+    display: none;
+    z-index: 10;
+    line-height: 1.5;
+    pointer-events: none;
+  }
+  #stream-stats span { color: #ccc; }
+
+  #error-toasts {
+    position: fixed;
+    bottom: 10px;
+    right: 12px;
+    z-index: 20;
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 6px;
+    max-width: 340px;
+  }
+  .error-toast {
+    font-size: 0.78rem;
+    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+    padding: 6px 10px;
+    border-radius: 4px;
+    background: rgba(80,10,10,0.85);
+    color: #ff8888;
+    border-left: 3px solid #ff5555;
+    animation: toast-in 0.2s ease-out;
+  }
+  .error-toast.warn {
+    background: rgba(60,40,0,0.85);
+    color: #fbbf24;
+    border-left-color: #f59e0b;
+  }
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
 </style>
 </head>
 <body>
@@ -100,6 +147,8 @@
 </div>
 
 <div id="status"></div>
+<div id="stream-stats"></div>
+<div id="error-toasts"></div>
 
 <script>
 (function() {
@@ -114,6 +163,8 @@
   const authForm = document.getElementById('auth-form');
   const passwordInput = document.getElementById('password-input');
   const authError = document.getElementById('auth-error');
+  const statsEl = document.getElementById('stream-stats');
+  const toastsEl = document.getElementById('error-toasts');
 
   let ws = null;
   let mediaSource = null;
@@ -124,12 +175,70 @@
   let initSegment = null;
   let authenticated = false;
   let serverMime = null;
+  let streamInfo = { fps: null, bitrate: null };
 
   function setStatus(text, cls) {
     statusEl.textContent = text;
     statusEl.className = cls;
     statusEl.style.display = text ? 'block' : 'none';
   }
+
+  function showError(msg, warn) {
+    const el = document.createElement('div');
+    el.className = 'error-toast' + (warn ? ' warn' : '');
+    el.textContent = msg;
+    toastsEl.appendChild(el);
+    // Keep max 5 toasts
+    while (toastsEl.children.length > 5) toastsEl.removeChild(toastsEl.firstChild);
+    setTimeout(() => { if (el.parentNode) el.remove(); }, 6000);
+  }
+
+  function updateStats() {
+    if (!authenticated || playerScreen.style.display === 'none') {
+      statsEl.style.display = 'none';
+      return;
+    }
+
+    const parts = [];
+
+    // Resolution
+    if (video.videoWidth && video.videoHeight) {
+      parts.push(`<span>${video.videoWidth}x${video.videoHeight}</span>`);
+    }
+
+    // FPS
+    if (streamInfo.fps) {
+      parts.push(`<span>${streamInfo.fps}</span> fps`);
+    }
+
+    // Bitrate
+    if (streamInfo.bitrate) {
+      parts.push(`<span>${streamInfo.bitrate}bps</span>`);
+    }
+
+    // Delay
+    if (sourceBuffer) {
+      try {
+        const buffered = sourceBuffer.buffered;
+        if (buffered.length > 0) {
+          const delay = buffered.end(buffered.length - 1) - video.currentTime;
+          parts.push(`delay <span>${delay.toFixed(1)}s</span>`);
+        }
+      } catch {}
+    }
+
+    // Queue
+    if (queue.length > 0) {
+      parts.push(`queue <span>${queue.length}</span>`);
+    }
+
+    if (parts.length > 0) {
+      statsEl.innerHTML = parts.join(' &middot; ');
+      statsEl.style.display = 'block';
+    }
+  }
+
+  setInterval(updateStats, 500);
 
   function getWsUrl() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -179,7 +288,6 @@
 
     ws.onclose = (e) => {
       if (e.code === 4003) {
-        // Wrong password — go back to auth
         showAuthError('Wrong password');
         return;
       }
@@ -187,13 +295,22 @@
         showAuthError('Stream is full');
         return;
       }
+      if (e.code === 4006) {
+        showError('Disconnected: client too slow (backpressure)');
+      } else if (e.code === 4010) {
+        showError('Stream is restarting...', true);
+      } else if (authenticated && e.code !== 1000) {
+        showError('Connection lost (code ' + e.code + ')');
+      }
       if (authenticated) {
         setStatus('Reconnecting...', 'reconnecting');
         scheduleReconnect();
       }
     };
 
-    ws.onerror = () => {};
+    ws.onerror = () => {
+      if (authenticated) showError('WebSocket error');
+    };
   }
 
   function handleAuthResponse(data) {
@@ -243,6 +360,7 @@
         createSourceBuffer(initSegment);
       }
     }, { once: true });
+
   }
 
   function handleSegment(data) {
@@ -252,6 +370,9 @@
         const msg = JSON.parse(data);
         if (msg.type === 'mime') {
           serverMime = msg.mime;
+        } else if (msg.type === 'stream_info') {
+          streamInfo.fps = msg.fps || null;
+          streamInfo.bitrate = msg.bitrate || null;
         }
       } catch {}
       return;
@@ -288,14 +409,18 @@
       sourceBuffer = mediaSource.addSourceBuffer(mime);
       sourceBuffer.mode = 'sequence';
 
-      sourceBuffer.addEventListener('updateend', processQueue);
+      sourceBuffer.addEventListener('updateend', () => {
+        // autoplay attribute is unreliable with MSE — kick playback after first append
+        if (video.paused) video.play().catch(() => {});
+        processQueue();
+      });
       sourceBuffer.addEventListener('error', () => {
-        console.error('SourceBuffer error');
+        showError('SourceBuffer error — stream may be corrupted');
       });
 
       appendBuffer(init);
     } catch (err) {
-      console.error('Failed to create SourceBuffer:', err);
+      showError('Failed to create SourceBuffer: ' + err.message);
     }
   }
 
@@ -306,8 +431,9 @@
 
     // Drop frames if queue is too long (> 30 segments)
     if (queue.length > 30) {
-      // Keep only the last few
+      const dropped = queue.length - 5;
       queue = queue.slice(-5);
+      showError('Dropped ' + dropped + ' frames (queue overflow)', true);
     }
 
     processQueue();
@@ -324,7 +450,7 @@
         evictBuffer();
         queue.unshift(chunk);
       } else {
-        console.error('appendBuffer error:', err);
+        showError('Buffer append error: ' + err.message);
       }
     }
   }

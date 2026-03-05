@@ -39,6 +39,7 @@ export class Capture extends EventEmitter {
       // Input
       '-f', 'avfoundation',
       '-capture_cursor', '1',
+      '-pixel_format', 'nv12',
       '-framerate', String(fps),
       '-i', inputDevice,
       // Video encoding

@@ -149,8 +149,9 @@ ${tunnelUrl ? `
   URL:      ${tunnelUrl}` : `
   URL:      http://localhost:${port}`}
   Password: ${password}
+  Link:     ${tunnelUrl || `http://localhost:${port}`}#${password}
 
-  Share both with your friends.
+  Share the link with your friends (auto-connects).
   Viewers: ${viewerCount}/${viewerMax}
 ${audioDevice != null ? '' : '\n  (no audio — click video to unmute is disabled)'}
   Press Ctrl+C to stop.

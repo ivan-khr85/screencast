@@ -98,6 +98,13 @@ export class StreamServer {
     this.#viewers.add(ws);
     this.#notifyViewerCount();
 
+    // Send stream info
+    ws.send(JSON.stringify({
+      type: 'stream_info',
+      fps: this.#config.fps,
+      bitrate: this.#config.bitrate,
+    }));
+
     // Send mime + init segment for late joiners
     const init = this.#mp4frag.initialization;
     if (init) {
