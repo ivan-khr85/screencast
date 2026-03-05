@@ -32,7 +32,11 @@ export class StreamServer {
     });
 
     this.#wss = new WebSocketServer({ server: this.#httpServer });
-    this.#wss.on("connection", (ws) => this.#handleConnection(ws));
+    this.#wss.on("connection", (ws, req) => {
+      // Disable Nagle's algorithm for lower latency
+      req.socket.setNoDelay(true);
+      this.#handleConnection(ws);
+    });
     this.#wss.on("error", () => {
       // Handled by the HTTP server's error listener in listen()
     });
@@ -112,12 +116,14 @@ export class StreamServer {
     this.#viewers.add(ws);
     this.#notifyViewerCount();
 
-    // Send stream info
+    // Send stream info + latency settings for the viewer
     ws.send(
       JSON.stringify({
         type: "stream_info",
         fps: this.#config.fps,
         bitrate: this.#config.bitrate,
+        liveEdgeThreshold: this.#config.liveEdgeThreshold,
+        bufferEvictionSeconds: this.#config.bufferEvictionSeconds,
       }),
     );
 

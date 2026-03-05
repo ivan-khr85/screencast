@@ -152,8 +152,8 @@
 
 <script>
 (function() {
-  const BUFFER_EVICTION_SEC = 10;
-  const LIVE_EDGE_THRESHOLD = 2;
+  let BUFFER_EVICTION_SEC = 5;
+  let LIVE_EDGE_THRESHOLD = 1;
   const RECONNECT_DELAYS = [1000, 2000, 4000, 8000];
 
   const authScreen = document.getElementById('auth-screen');
@@ -379,6 +379,8 @@
         } else if (msg.type === 'stream_info') {
           streamInfo.fps = msg.fps || null;
           streamInfo.bitrate = msg.bitrate || null;
+          if (msg.liveEdgeThreshold) LIVE_EDGE_THRESHOLD = msg.liveEdgeThreshold;
+          if (msg.bufferEvictionSeconds) BUFFER_EVICTION_SEC = msg.bufferEvictionSeconds;
           dbg('received stream_info:', JSON.stringify(msg));
         }
       } catch {}
@@ -450,10 +452,10 @@
 
     queue.push(data);
 
-    // Drop frames if queue is too long (> 30 segments)
-    if (queue.length > 30) {
-      const dropped = queue.length - 5;
-      queue = queue.slice(-5);
+    // Drop frames if queue is too long (> 10 chunks)
+    if (queue.length > 10) {
+      const dropped = queue.length - 3;
+      queue = queue.slice(-3);
       showError('Dropped ' + dropped + ' frames (queue overflow)', true);
     }
 
@@ -511,7 +513,7 @@
         }
       }
     } catch {}
-  }, 1000);
+  }, 500);
 
   // Unmute on click
   video.addEventListener('click', () => {

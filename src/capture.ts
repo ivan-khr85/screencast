@@ -30,12 +30,12 @@ export class Capture extends EventEmitter {
   #spawn(screenIndex: string, audioDevice: string | null): void {
     if (this.#stopped) return;
 
-    const { fps, bitrate, maxrate, bufsize, gopSize, audioBitrate, audioSampleRate, audioChannels } = this.#config;
+    const { fps, bitrate, maxrate, bufsize, gopSize, resolution, audioBitrate, audioSampleRate, audioChannels } = this.#config;
     const hasAudio = audioDevice != null;
     const inputDevice = hasAudio ? `${screenIndex}:${audioDevice}` : `${screenIndex}:none`;
 
     const args: string[] = [
-      '-hide_banner', '-loglevel', 'info',
+      '-hide_banner', '-loglevel', 'error',
       // Input
       '-f', 'avfoundation',
       '-capture_cursor', '1',
@@ -51,8 +51,12 @@ export class Capture extends EventEmitter {
       '-bufsize', bufsize,
       '-g', String(gopSize),
       '-keyint_min', String(gopSize),
-      '-profile:v', 'high',
+      '-profile:v', 'baseline',
     ];
+
+    if (resolution && resolution !== 'original') {
+      args.push('-vf', `scale=-2:${resolution}`);
+    }
 
     if (hasAudio) {
       args.push(

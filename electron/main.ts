@@ -29,7 +29,7 @@ import { StreamServer } from '../src/server.js';
 import { generatePassword } from '../src/auth.js';
 import { Tunnel } from '../src/tunnel.js';
 import { detectBlackHole } from '../src/audio-setup.js';
-import { DEFAULTS } from '../src/constants.js';
+import { DEFAULTS, LATENCY_PRESETS, LatencyMode } from '../src/constants.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -37,6 +37,8 @@ interface StreamConfig {
   port: number;
   fps: number;
   bitrate: string;
+  quality: string;
+  latency: LatencyMode;
   password: string;
   maxViewers: number;
   audio: boolean;
@@ -169,17 +171,23 @@ async function startStream(config: StreamConfig): Promise<void> {
 
   const password = config.password || generatePassword();
   const port = config.port;
+  const preset = LATENCY_PRESETS[config.latency] || LATENCY_PRESETS['medium'];
+  const gopSize = Math.max(2, Math.round(config.fps * preset.gopMultiplier));
 
   server = new StreamServer(password, {
     port,
     maxViewers: config.maxViewers,
+    liveEdgeThreshold: preset.liveEdgeThreshold,
+    bufferEvictionSeconds: preset.bufferEvictionSeconds,
   });
   await server.listen(port);
 
   capture = new Capture({
     fps: config.fps,
     bitrate: config.bitrate,
-    gopSize: config.fps,
+    bufsize: preset.bufsize,
+    gopSize,
+    resolution: config.quality,
   });
   capture.on('data', (chunk) => server!.pushData(chunk));
   capture.on('restart', () => server!.resetParser());
