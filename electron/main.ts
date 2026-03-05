@@ -254,6 +254,7 @@ function createWindow(): void {
     height: 580,
     resizable: false,
     maximizable: false,
+    icon: path.join(getResourcesPath(), 'icon.png'),
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     backgroundColor: '#0a0a0a',
     webPreferences: {

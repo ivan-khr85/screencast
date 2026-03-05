@@ -2,6 +2,7 @@
   "name": "screencast",
   "version": "1.0.0",
   "description": "Stream your macOS screen + audio to friends via browser",
+  "author": "Ivan Khr",
   "main": "dist/electron/main.js",
   "bin": {
     "screencast": "./dist/bin/cli.js"
@@ -37,12 +38,14 @@
         "to": "."
       }
     ],
+    "icon": "resources/icon.png",
     "mac": {
       "target": [
         "dmg",
         "zip"
       ],
-      "category": "public.app-category.utilities"
+      "category": "public.app-category.utilities",
+      "icon": "resources/icon.png"
     },
     "win": {
       "target": [
