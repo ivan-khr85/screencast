@@ -1,0 +1,17 @@
+{
+  "name": "screencast",
+  "version": "1.0.0",
+  "description": "Stream your macOS screen + audio to friends via browser",
+  "bin": {
+    "screencast": "./bin/cli.js"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "mp4frag": "^0.7.0",
+    "ws": "^8.18.0"
+  }
+}

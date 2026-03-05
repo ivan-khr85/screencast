@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Screen Stream</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0a;
+    color: #e0e0e0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  #auth-screen {
+    text-align: center;
+    max-width: 320px;
+  }
+  #auth-screen h1 {
+    font-size: 1.3rem;
+    margin-bottom: 1.2rem;
+    font-weight: 500;
+  }
+  #auth-screen input {
+    width: 100%;
+    padding: 10px 14px;
+    font-size: 1rem;
+    border: 1px solid #333;
+    border-radius: 6px;
+    background: #1a1a1a;
+    color: #e0e0e0;
+    outline: none;
+    text-align: center;
+    letter-spacing: 2px;
+    font-family: monospace;
+  }
+  #auth-screen input:focus { border-color: #4a9eff; }
+  #auth-screen button {
+    margin-top: 12px;
+    width: 100%;
+    padding: 10px;
+    font-size: 1rem;
+    border: none;
+    border-radius: 6px;
+    background: #4a9eff;
+    color: #fff;
+    cursor: pointer;
+    font-weight: 500;
+  }
+  #auth-screen button:hover { background: #3a8eef; }
+  #auth-error {
+    color: #ff5555;
+    margin-top: 10px;
+    font-size: 0.9rem;
+    display: none;
+  }
+
+  #player-screen { display: none; width: 100%; height: 100%; }
+  video {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #000;
+  }
+
+  #status {
+    position: fixed;
+    top: 12px;
+    right: 14px;
+    font-size: 0.8rem;
+    padding: 4px 10px;
+    border-radius: 4px;
+    background: rgba(0,0,0,0.7);
+    display: none;
+    z-index: 10;
+  }
+  #status.connected { color: #4ade80; }
+  #status.reconnecting { color: #fbbf24; }
+  #status.error { color: #ff5555; }
+</style>
+</head>
+<body>
+
+<div id="auth-screen">
+  <h1>Screen Stream</h1>
+  <form id="auth-form">
+    <input type="text" id="password-input" placeholder="Enter password" autocomplete="off" autofocus>
+    <button type="submit">Connect</button>
+    <div id="auth-error"></div>
+  </form>
+</div>
+
+<div id="player-screen">
+  <video id="video" autoplay muted playsinline></video>
+</div>
+
+<div id="status"></div>
+
+<script>
+(function() {
+  const BUFFER_EVICTION_SEC = 10;
+  const LIVE_EDGE_THRESHOLD = 2;
+  const RECONNECT_DELAYS = [1000, 2000, 4000, 8000];
+
+  const authScreen = document.getElementById('auth-screen');
+  const playerScreen = document.getElementById('player-screen');
+  const video = document.getElementById('video');
+  const statusEl = document.getElementById('status');
+  const authForm = document.getElementById('auth-form');
+  const passwordInput = document.getElementById('password-input');
+  const authError = document.getElementById('auth-error');
+
+  let ws = null;
+  let mediaSource = null;
+  let sourceBuffer = null;
+  let queue = [];
+  let reconnectAttempt = 0;
+  let password = '';
+  let initSegment = null;
+  let authenticated = false;
+  let serverMime = null;
+
+  function setStatus(text, cls) {
+    statusEl.textContent = text;
+    statusEl.className = cls;
+    statusEl.style.display = text ? 'block' : 'none';
+  }
+
+  function getWsUrl() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${location.host}`;
+  }
+
+  authForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    password = passwordInput.value.trim();
+    if (!password) return;
+    authError.style.display = 'none';
+    connect();
+  });
+
+  function connect() {
+    if (ws) {
+      ws.onclose = null;
+      ws.close();
+    }
+
+    setStatus('Connecting...', 'reconnecting');
+    ws = new WebSocket(getWsUrl());
+    ws.binaryType = 'arraybuffer';
+    authenticated = false;
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: 'auth', password: password }));
+    };
+
+    ws.onmessage = (event) => {
+      if (!authenticated) {
+        handleAuthResponse(event.data);
+        return;
+      }
+      handleSegment(event.data);
+    };
+
+    ws.onclose = (e) => {
+      if (e.code === 4003) {
+        // Wrong password — go back to auth
+        showAuthError('Wrong password');
+        return;
+      }
+      if (e.code === 4005) {
+        showAuthError('Stream is full');
+        return;
+      }
+      if (authenticated) {
+        setStatus('Reconnecting...', 'reconnecting');
+        scheduleReconnect();
+      }
+    };
+
+    ws.onerror = () => {};
+  }
+
+  function handleAuthResponse(data) {
+    try {
+      const msg = JSON.parse(data);
+      if (msg.type === 'auth' && msg.success) {
+        authenticated = true;
+        reconnectAttempt = 0;
+        authScreen.style.display = 'none';
+        playerScreen.style.display = 'block';
+        setStatus('Connected', 'connected');
+        setTimeout(() => setStatus('', ''), 2000);
+        initMediaSource();
+      } else {
+        showAuthError('Wrong password');
+      }
+    } catch {
+      showAuthError('Connection error');
+    }
+  }
+
+  function showAuthError(msg) {
+    authScreen.style.display = 'block';
+    playerScreen.style.display = 'none';
+    authError.textContent = msg;
+    authError.style.display = 'block';
+    passwordInput.focus();
+    passwordInput.select();
+  }
+
+  function initMediaSource() {
+    if (mediaSource) {
+      // Clean up old media source
+      try { video.src = ''; } catch {}
+    }
+
+    mediaSource = new MediaSource();
+    sourceBuffer = null;
+    queue = [];
+    initSegment = null;
+
+    video.src = URL.createObjectURL(mediaSource);
+
+    mediaSource.addEventListener('sourceopen', () => {
+      // If init segment arrived before sourceopen, create the source buffer now
+      if (initSegment && !sourceBuffer) {
+        createSourceBuffer(initSegment);
+      }
+    }, { once: true });
+  }
+
+  function handleSegment(data) {
+    // JSON text messages (mime type info)
+    if (typeof data === 'string') {
+      try {
+        const msg = JSON.parse(data);
+        if (msg.type === 'mime') {
+          serverMime = msg.mime;
+        }
+      } catch {}
+      return;
+    }
+
+    if (!(data instanceof ArrayBuffer)) return;
+    const buf = new Uint8Array(data);
+
+    // First binary message is the init segment (ftyp + moov)
+    if (!initSegment) {
+      initSegment = buf;
+      createSourceBuffer(buf);
+      return;
+    }
+
+    appendBuffer(buf);
+  }
+
+  function createSourceBuffer(init) {
+    if (mediaSource.readyState !== 'open') return;
+
+    // Use server-provided mime if available, otherwise try common codecs
+    let mime = serverMime;
+    if (!mime || !MediaSource.isTypeSupported(mime)) {
+      const fallbacks = [
+        'video/mp4; codecs="avc1.640028,mp4a.40.2"',
+        'video/mp4; codecs="avc1.640028"',
+        'video/mp4',
+      ];
+      mime = fallbacks.find(m => MediaSource.isTypeSupported(m)) || 'video/mp4';
+    }
+
+    try {
+      sourceBuffer = mediaSource.addSourceBuffer(mime);
+      sourceBuffer.mode = 'sequence';
+
+      sourceBuffer.addEventListener('updateend', processQueue);
+      sourceBuffer.addEventListener('error', () => {
+        console.error('SourceBuffer error');
+      });
+
+      appendBuffer(init);
+    } catch (err) {
+      console.error('Failed to create SourceBuffer:', err);
+    }
+  }
+
+  function appendBuffer(data) {
+    if (!sourceBuffer) return;
+
+    queue.push(data);
+
+    // Drop frames if queue is too long (> 30 segments)
+    if (queue.length > 30) {
+      // Keep only the last few
+      queue = queue.slice(-5);
+    }
+
+    processQueue();
+  }
+
+  function processQueue() {
+    if (!sourceBuffer || sourceBuffer.updating || queue.length === 0) return;
+
+    const chunk = queue.shift();
+    try {
+      sourceBuffer.appendBuffer(chunk);
+    } catch (err) {
+      if (err.name === 'QuotaExceededError') {
+        evictBuffer();
+        queue.unshift(chunk);
+      } else {
+        console.error('appendBuffer error:', err);
+      }
+    }
+  }
+
+  function evictBuffer() {
+    if (!sourceBuffer || sourceBuffer.updating) return;
+    try {
+      const buffered = sourceBuffer.buffered;
+      if (buffered.length > 0) {
+        const removeEnd = buffered.end(buffered.length - 1) - BUFFER_EVICTION_SEC;
+        if (removeEnd > buffered.start(0)) {
+          sourceBuffer.remove(buffered.start(0), removeEnd);
+        }
+      }
+    } catch {}
+  }
+
+  // Live edge seeking — keep video at the live edge
+  setInterval(() => {
+    if (!video || video.paused || !sourceBuffer) return;
+
+    try {
+      const buffered = sourceBuffer.buffered;
+      if (buffered.length === 0) return;
+
+      const liveEdge = buffered.end(buffered.length - 1);
+      const behind = liveEdge - video.currentTime;
+
+      if (behind > LIVE_EDGE_THRESHOLD) {
+        video.currentTime = liveEdge - 0.1;
+      }
+
+      // Evict old buffer
+      if (liveEdge - buffered.start(0) > BUFFER_EVICTION_SEC) {
+        if (!sourceBuffer.updating) {
+          sourceBuffer.remove(buffered.start(0), liveEdge - BUFFER_EVICTION_SEC);
+        }
+      }
+    } catch {}
+  }, 1000);
+
+  // Unmute on click
+  video.addEventListener('click', () => {
+    video.muted = !video.muted;
+    setStatus(video.muted ? 'Muted' : 'Unmuted', 'connected');
+    setTimeout(() => setStatus('', ''), 1500);
+  });
+
+  function scheduleReconnect() {
+    const delay = RECONNECT_DELAYS[Math.min(reconnectAttempt, RECONNECT_DELAYS.length - 1)];
+    reconnectAttempt++;
+    setTimeout(() => connect(), delay);
+  }
+})();
+</script>
+</body>
+</html>
