@@ -1,12 +1,13 @@
 import crypto from 'node:crypto';
+import type { WebSocket } from 'ws';
 import { DEFAULTS } from './constants.js';
 
-export function generatePassword(length = DEFAULTS.passwordLength) {
+export function generatePassword(length = DEFAULTS.passwordLength): string {
   return crypto.randomBytes(length).toString('hex');
 }
 
-export function createAuthHandler(password, { timeout = DEFAULTS.authTimeout } = {}) {
-  return function authenticateSocket(ws) {
+export function createAuthHandler(password: string, { timeout = DEFAULTS.authTimeout } = {}) {
+  return function authenticateSocket(ws: WebSocket): Promise<void> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         ws.close(4001, 'Auth timeout');

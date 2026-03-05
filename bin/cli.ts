@@ -8,6 +8,17 @@ import { Tunnel } from '../src/tunnel.js';
 import { detectBlackHole, printAudioSetupGuide } from '../src/audio-setup.js';
 import { DEFAULTS } from '../src/constants.js';
 
+interface CliOptions {
+  port: string;
+  fps: string;
+  bitrate: string;
+  password?: string;
+  maxViewers: string;
+  audio: boolean;
+  tunnel: boolean;
+  listDevices?: boolean;
+}
+
 program
   .name('screencast')
   .description('Stream your macOS screen + audio to friends via browser')
@@ -21,7 +32,7 @@ program
   .option('--list-devices', 'List available capture devices and exit');
 
 program.parse();
-const opts = program.opts();
+const opts = program.opts<CliOptions>();
 
 if (opts.listDevices) {
   try {
@@ -33,7 +44,7 @@ if (opts.listDevices) {
     console.log();
   } catch (err) {
     console.error('Failed to list devices. Is FFmpeg installed?');
-    console.error(err.message);
+    console.error((err instanceof Error ? err.message : String(err)));
     process.exit(1);
   }
   process.exit(0);
@@ -48,7 +59,7 @@ const wantTunnel = opts.tunnel !== false;
 
 // Detect devices
 let screenIndex = '1'; // Default: first screen (Capture Entire Display)
-let audioDevice = null;
+let audioDevice: string | null = null;
 
 try {
   const { screens, audioDevices } = await listDevices();
@@ -74,7 +85,7 @@ try {
   }
 } catch (err) {
   console.error('Failed to detect devices. Is FFmpeg installed?');
-  console.error(`  ${err.message}`);
+  console.error(`  ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 }
 
@@ -113,15 +124,15 @@ capture.on('error', (err) => {
 capture.start(screenIndex, audioDevice);
 
 // Start tunnel
-let tunnelUrl = null;
-let tunnel = null;
+let tunnelUrl: string | null = null;
+let tunnel: Tunnel | null = null;
 
 if (wantTunnel) {
   tunnel = new Tunnel();
   try {
     tunnelUrl = await tunnel.start(port);
   } catch (err) {
-    console.error(`\n  Tunnel failed: ${err.message}`);
+    console.error(`\n  Tunnel failed: ${err instanceof Error ? err.message : String(err)}`);
     console.error('  Continuing in LAN-only mode.\n');
   }
 }
@@ -130,7 +141,7 @@ if (wantTunnel) {
 const viewerMax = maxViewers;
 let viewerCount = 0;
 
-function printStatus() {
+function printStatus(): void {
   console.clear();
   console.log(`
   Screen Stream started!
@@ -154,7 +165,7 @@ server.onViewerCountChange((count) => {
 printStatus();
 
 // Graceful shutdown
-function shutdown() {
+function shutdown(): void {
   console.log('\n  Shutting down...');
   capture.stop();
   server.close();

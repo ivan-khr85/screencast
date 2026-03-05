@@ -2,24 +2,24 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { WebSocketServer } from 'ws';
+import { WebSocketServer, WebSocket } from 'ws';
 import Mp4Frag from 'mp4frag';
 import { createAuthHandler } from './auth.js';
-import { DEFAULTS } from './constants.js';
+import { DEFAULTS, Config } from './constants.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export class StreamServer {
-  #httpServer;
-  #wss;
-  #mp4frag;
-  #authenticate;
-  #viewers = new Set();
-  #config;
-  #viewerCountCallback;
-  #mime = null;
+  #httpServer: http.Server;
+  #wss: WebSocketServer;
+  #mp4frag: Mp4Frag;
+  #authenticate: (ws: WebSocket) => Promise<void>;
+  #viewers = new Set<WebSocket>();
+  #config: Config;
+  #viewerCountCallback?: (count: number) => void;
+  #mime: string | null = null;
 
-  constructor(password, config = {}) {
+  constructor(password: string, config: Partial<Config> = {}) {
     this.#config = { ...DEFAULTS, ...config };
     this.#authenticate = createAuthHandler(password);
 
@@ -41,23 +41,23 @@ export class StreamServer {
     this.#wss.on('connection', (ws) => this.#handleConnection(ws));
   }
 
-  get viewerCount() {
+  get viewerCount(): number {
     return this.#viewers.size;
   }
 
-  onViewerCountChange(callback) {
+  onViewerCountChange(callback: (count: number) => void): void {
     this.#viewerCountCallback = callback;
   }
 
-  #notifyViewerCount() {
+  #notifyViewerCount(): void {
     this.#viewerCountCallback?.(this.#viewers.size);
   }
 
-  pushData(chunk) {
+  pushData(chunk: Buffer): void {
     this.#mp4frag.write(chunk);
   }
 
-  resetParser() {
+  resetParser(): void {
     // On FFmpeg restart, create a new mp4frag instance
     const oldFrag = this.#mp4frag;
     this.#mp4frag = new Mp4Frag();
@@ -80,7 +80,7 @@ export class StreamServer {
     oldFrag.destroy();
   }
 
-  async #handleConnection(ws) {
+  async #handleConnection(ws: WebSocket): Promise<void> {
     if (this.#viewers.size >= this.#config.maxViewers) {
       ws.close(4005, 'Max viewers reached');
       return;
@@ -115,9 +115,9 @@ export class StreamServer {
     });
   }
 
-  #broadcast(segment) {
+  #broadcast(segment: Buffer): void {
     for (const ws of this.#viewers) {
-      if (ws.readyState !== ws.OPEN) {
+      if (ws.readyState !== WebSocket.OPEN) {
         this.#viewers.delete(ws);
         this.#notifyViewerCount();
         continue;
@@ -135,7 +135,7 @@ export class StreamServer {
     }
   }
 
-  #handleHttp(req, res) {
+  #handleHttp(req: http.IncomingMessage, res: http.ServerResponse): void {
     if (req.url === '/' || req.url === '/index.html') {
       const viewerPath = path.join(__dirname, 'viewer.html');
       fs.readFile(viewerPath, (err, data) => {
@@ -154,13 +154,13 @@ export class StreamServer {
     res.end('Not found');
   }
 
-  listen(port) {
+  listen(port: number): Promise<void> {
     return new Promise((resolve) => {
       this.#httpServer.listen(port, () => resolve());
     });
   }
 
-  close() {
+  close(): void {
     for (const ws of this.#viewers) {
       ws.close(1001, 'Server shutting down');
     }

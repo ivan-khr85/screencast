@@ -1,10 +1,10 @@
-import { spawn } from 'node:child_process';
+import { spawn, ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 
 export class Tunnel extends EventEmitter {
-  #process = null;
+  #process: ChildProcess | null = null;
 
-  start(port) {
+  start(port: number): Promise<string> {
     return new Promise((resolve, reject) => {
       const proc = spawn('cloudflared', [
         'tunnel', '--url', `http://localhost:${port}`,
@@ -17,7 +17,7 @@ export class Tunnel extends EventEmitter {
 
       const urlRegex = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
 
-      const handleOutput = (data) => {
+      const handleOutput = (data: Buffer): void => {
         const text = data.toString();
         const match = text.match(urlRegex);
         if (match && !resolved) {
@@ -26,10 +26,10 @@ export class Tunnel extends EventEmitter {
         }
       };
 
-      proc.stdout.on('data', handleOutput);
-      proc.stderr.on('data', handleOutput);
+      proc.stdout!.on('data', handleOutput);
+      proc.stderr!.on('data', handleOutput);
 
-      proc.on('error', (err) => {
+      proc.on('error', (err: Error) => {
         if (!resolved) {
           resolved = true;
           reject(new Error(`cloudflared failed to start: ${err.message}`));
@@ -37,7 +37,7 @@ export class Tunnel extends EventEmitter {
         this.emit('error', err);
       });
 
-      proc.on('close', (code) => {
+      proc.on('close', (code: number | null) => {
         if (!resolved) {
           resolved = true;
           reject(new Error(`cloudflared exited with code ${code}`));
@@ -55,7 +55,7 @@ export class Tunnel extends EventEmitter {
     });
   }
 
-  stop() {
+  stop(): void {
     if (this.#process) {
       this.#process.kill('SIGTERM');
       this.#process = null;

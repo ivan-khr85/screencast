@@ -3,9 +3,14 @@
   "version": "1.0.0",
   "description": "Stream your macOS screen + audio to friends via browser",
   "bin": {
-    "screencast": "./bin/cli.js"
+    "screencast": "./dist/bin/cli.js"
   },
   "type": "module",
+  "scripts": {
+    "build": "tsc && cp src/viewer.html dist/src/viewer.html",
+    "start": "npm run build && node dist/bin/cli.js",
+    "dev": "tsx bin/cli.ts"
+  },
   "engines": {
     "node": ">=20.0.0"
   },
@@ -13,5 +18,11 @@
     "commander": "^12.1.0",
     "mp4frag": "^0.7.0",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.3",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
   }
 }

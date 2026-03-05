@@ -1,14 +1,14 @@
-import { listDevices } from './capture.js';
+import { listDevices, Device } from './capture.js';
 
 const BLACKHOLE_NAME = 'BlackHole 2ch';
 
-export async function detectBlackHole() {
+export async function detectBlackHole(): Promise<Device | null> {
   const { audioDevices } = await listDevices();
   const device = audioDevices.find((d) => d.name.includes('BlackHole'));
   return device || null;
 }
 
-export function printAudioSetupGuide() {
+export function printAudioSetupGuide(): void {
   console.log(`
   ┌─────────────────────────────────────────────────────────┐
   │  System audio capture requires BlackHole virtual driver  │

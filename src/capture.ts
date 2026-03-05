@@ -1,30 +1,40 @@
-import { spawn } from 'node:child_process';
+import { spawn, ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { DEFAULTS } from './constants.js';
+import { DEFAULTS, Config } from './constants.js';
+
+export interface Device {
+  index: string;
+  name: string;
+}
+
+export interface DeviceList {
+  screens: Device[];
+  audioDevices: Device[];
+}
 
 export class Capture extends EventEmitter {
-  #process = null;
+  #process: ChildProcess | null = null;
   #stopped = false;
-  #config;
+  #config: Config;
 
-  constructor(config = {}) {
+  constructor(config: Partial<Config> = {}) {
     super();
     this.#config = { ...DEFAULTS, ...config };
   }
 
-  start(screenIndex, audioDevice) {
+  start(screenIndex: string, audioDevice: string | null): void {
     this.#stopped = false;
     this.#spawn(screenIndex, audioDevice);
   }
 
-  #spawn(screenIndex, audioDevice) {
+  #spawn(screenIndex: string, audioDevice: string | null): void {
     if (this.#stopped) return;
 
     const { fps, bitrate, maxrate, bufsize, gopSize, audioBitrate, audioSampleRate, audioChannels } = this.#config;
     const hasAudio = audioDevice != null;
     const inputDevice = hasAudio ? `${screenIndex}:${audioDevice}` : `${screenIndex}:none`;
 
-    const args = [
+    const args: string[] = [
       '-hide_banner', '-loglevel', 'error',
       // Input
       '-f', 'avfoundation',
@@ -69,28 +79,28 @@ export class Capture extends EventEmitter {
 
     this.#process = proc;
 
-    proc.stdout.on('data', (chunk) => {
+    proc.stdout!.on('data', (chunk: Buffer) => {
       this.emit('data', chunk);
     });
 
-    proc.stderr.on('data', (data) => {
+    proc.stderr!.on('data', (data: Buffer) => {
       const msg = data.toString().trim();
       if (msg) this.emit('log', msg);
     });
 
-    proc.on('close', (code) => {
+    proc.on('close', (code: number | null) => {
       if (this.#stopped) return;
       this.emit('log', `FFmpeg exited with code ${code}, restarting...`);
       setTimeout(() => this.#spawn(screenIndex, audioDevice), 1000);
       this.emit('restart');
     });
 
-    proc.on('error', (err) => {
+    proc.on('error', (err: Error) => {
       this.emit('error', err);
     });
   }
 
-  stop() {
+  stop(): void {
     this.#stopped = true;
     if (this.#process) {
       this.#process.kill('SIGTERM');
@@ -99,7 +109,7 @@ export class Capture extends EventEmitter {
   }
 }
 
-export async function listDevices() {
+export async function listDevices(): Promise<DeviceList> {
   return new Promise((resolve, reject) => {
     const proc = spawn('ffmpeg', [
       '-hide_banner',
@@ -109,13 +119,13 @@ export async function listDevices() {
     ], { stdio: ['ignore', 'pipe', 'pipe'] });
 
     let stderr = '';
-    proc.stderr.on('data', (d) => { stderr += d.toString(); });
+    proc.stderr!.on('data', (d: Buffer) => { stderr += d.toString(); });
     proc.on('close', () => {
-      const screens = [];
-      const audioDevices = [];
+      const screens: Device[] = [];
+      const audioDevices: Device[] = [];
 
       const lines = stderr.split('\n');
-      let section = null;
+      let section: 'video' | 'audio' | null = null;
 
       for (const line of lines) {
         if (line.includes('AVFoundation video devices:')) {
