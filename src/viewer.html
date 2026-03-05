@@ -240,6 +240,8 @@
 
   setInterval(updateStats, 500);
 
+  function dbg() {}
+
   function getWsUrl() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     return `${proto}//${location.host}`;
@@ -275,6 +277,7 @@
     authenticated = false;
 
     ws.onopen = () => {
+      dbg('WebSocket connected, sending auth');
       ws.send(JSON.stringify({ type: 'auth', password: password }));
     };
 
@@ -287,6 +290,7 @@
     };
 
     ws.onclose = (e) => {
+      dbg('WebSocket closed, code=' + e.code, 'reason=' + e.reason);
       if (e.code === 4003) {
         showAuthError('Wrong password');
         return;
@@ -343,7 +347,6 @@
 
   function initMediaSource() {
     if (mediaSource) {
-      // Clean up old media source
       try { video.src = ''; } catch {}
     }
 
@@ -352,11 +355,13 @@
     queue = [];
     initSegment = null;
 
+    dbg('MediaSource created, readyState=' + mediaSource.readyState);
     video.src = URL.createObjectURL(mediaSource);
 
     mediaSource.addEventListener('sourceopen', () => {
-      // If init segment arrived before sourceopen, create the source buffer now
+      dbg('MediaSource sourceopen fired');
       if (initSegment && !sourceBuffer) {
+        dbg('init segment was queued, creating SourceBuffer now');
         createSourceBuffer(initSegment);
       }
     }, { once: true });
@@ -370,9 +375,11 @@
         const msg = JSON.parse(data);
         if (msg.type === 'mime') {
           serverMime = msg.mime;
+          dbg('received mime:', msg.mime);
         } else if (msg.type === 'stream_info') {
           streamInfo.fps = msg.fps || null;
           streamInfo.bitrate = msg.bitrate || null;
+          dbg('received stream_info:', JSON.stringify(msg));
         }
       } catch {}
       return;
@@ -384,6 +391,7 @@
     // First binary message is the init segment (ftyp + moov)
     if (!initSegment) {
       initSegment = buf;
+      dbg('received init segment:', buf.length, 'bytes, MediaSource.readyState=' + mediaSource.readyState);
       createSourceBuffer(buf);
       return;
     }
@@ -392,10 +400,14 @@
   }
 
   function createSourceBuffer(init) {
-    if (mediaSource.readyState !== 'open') return;
+    if (mediaSource.readyState !== 'open') {
+      dbg('createSourceBuffer: MediaSource not open yet (readyState=' + mediaSource.readyState + '), deferring');
+      return;
+    }
 
     // Use server-provided mime if available, otherwise try common codecs
     let mime = serverMime;
+    dbg('createSourceBuffer: serverMime=' + serverMime, 'isSupported=' + (mime ? MediaSource.isTypeSupported(mime) : 'N/A'));
     if (!mime || !MediaSource.isTypeSupported(mime)) {
       const fallbacks = [
         'video/mp4; codecs="avc1.640028,mp4a.40.2"',
@@ -403,23 +415,32 @@
         'video/mp4',
       ];
       mime = fallbacks.find(m => MediaSource.isTypeSupported(m)) || 'video/mp4';
+      dbg('createSourceBuffer: using fallback mime=' + mime);
     }
 
     try {
       sourceBuffer = mediaSource.addSourceBuffer(mime);
       sourceBuffer.mode = 'sequence';
+      dbg('SourceBuffer created, mode=sequence, mime=' + mime);
 
       sourceBuffer.addEventListener('updateend', () => {
-        // autoplay attribute is unreliable with MSE — kick playback after first append
-        if (video.paused) video.play().catch(() => {});
+        if (video.paused) {
+          video.play().then(() => {
+            dbg('video.play() succeeded');
+          }).catch((err) => {
+            dbg('video.play() failed:', err.message);
+          });
+        }
         processQueue();
       });
-      sourceBuffer.addEventListener('error', () => {
+      sourceBuffer.addEventListener('error', (e) => {
+        dbg('SourceBuffer error event', e);
         showError('SourceBuffer error — stream may be corrupted');
       });
 
       appendBuffer(init);
     } catch (err) {
+      dbg('createSourceBuffer failed:', err.message);
       showError('Failed to create SourceBuffer: ' + err.message);
     }
   }

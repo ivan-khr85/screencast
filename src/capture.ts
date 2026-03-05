@@ -35,11 +35,10 @@ export class Capture extends EventEmitter {
     const inputDevice = hasAudio ? `${screenIndex}:${audioDevice}` : `${screenIndex}:none`;
 
     const args: string[] = [
-      '-hide_banner', '-loglevel', 'error',
+      '-hide_banner', '-loglevel', 'info',
       // Input
       '-f', 'avfoundation',
       '-capture_cursor', '1',
-      '-pixel_format', 'nv12',
       '-framerate', String(fps),
       '-i', inputDevice,
       // Video encoding
@@ -74,13 +73,29 @@ export class Capture extends EventEmitter {
       'pipe:1',
     );
 
+    this.emit('log', `Starting ffmpeg: screen=${screenIndex} audio=${audioDevice ?? 'none'}`);
+    this.emit('log', `ffmpeg args: ${args.join(' ')}`);
+
     const proc = spawn('ffmpeg', args, {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
     this.#process = proc;
 
+    let gotData = false;
+    const noDataTimer = setTimeout(() => {
+      if (!gotData && !this.#stopped) {
+        this.emit('log', 'WARNING: No video data after 5 seconds. Screen recording permission may be missing.');
+        this.emit('log', 'Go to: System Settings → Privacy & Security → Screen Recording → enable your terminal app.');
+      }
+    }, 5000);
+
     proc.stdout!.on('data', (chunk: Buffer) => {
+      if (!gotData) {
+        gotData = true;
+        clearTimeout(noDataTimer);
+        this.emit('log', `First ffmpeg output: ${chunk.length} bytes`);
+      }
       this.emit('data', chunk);
     });
 
@@ -90,6 +105,7 @@ export class Capture extends EventEmitter {
     });
 
     proc.on('close', (code: number | null) => {
+      clearTimeout(noDataTimer);
       if (this.#stopped) return;
       this.emit('log', `FFmpeg exited with code ${code}, restarting...`);
       setTimeout(() => this.#spawn(screenIndex, audioDevice), 1000);

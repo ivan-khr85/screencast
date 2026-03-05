@@ -111,10 +111,7 @@ capture.on('restart', () => {
 });
 
 capture.on('log', (msg) => {
-  // Only show FFmpeg errors, not noise
-  if (msg.toLowerCase().includes('error') || msg.toLowerCase().includes('fatal')) {
-    console.error(`  [ffmpeg] ${msg}`);
-  }
+  console.error(`  [ffmpeg] ${msg}`);
 });
 
 capture.on('error', (err) => {
@@ -142,19 +139,14 @@ const viewerMax = maxViewers;
 let viewerCount = 0;
 
 function printStatus(): void {
-  console.clear();
   console.log(`
-  Screen Stream started!
-${tunnelUrl ? `
-  URL:      ${tunnelUrl}` : `
-  URL:      http://localhost:${port}`}
+  ─── Screen Stream ───
+  URL:      ${tunnelUrl || `http://localhost:${port}`}
   Password: ${password}
   Link:     ${tunnelUrl || `http://localhost:${port}`}#${password}
-
-  Share the link with your friends (auto-connects).
-  Viewers: ${viewerCount}/${viewerMax}
-${audioDevice != null ? '' : '\n  (no audio — click video to unmute is disabled)'}
-  Press Ctrl+C to stop.
+  Viewers:  ${viewerCount}/${viewerMax}
+${audioDevice != null ? '' : '  (no audio)'}  Press Ctrl+C to stop.
+  ─────────────────────
 `);
 }
 
