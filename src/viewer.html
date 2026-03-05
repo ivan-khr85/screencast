@@ -136,12 +136,12 @@
     return `${proto}//${location.host}`;
   }
 
-  // Auto-connect if password is in query params (?p=...)
-  const urlParams = new URLSearchParams(location.search);
-  const autoPassword = urlParams.get('p');
-  if (autoPassword) {
-    password = autoPassword;
-    // Clean the password from the URL bar so it's not visible/shared accidentally
+  // Auto-connect if password is in the URL hash (#password).
+  // Hash fragments are never sent to the server or proxy (Cloudflare),
+  // so they survive tunneling and aren't logged.
+  const hashPassword = location.hash.slice(1);
+  if (hashPassword) {
+    password = decodeURIComponent(hashPassword);
     history.replaceState(null, '', location.pathname);
     connect();
   }

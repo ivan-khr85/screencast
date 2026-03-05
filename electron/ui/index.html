@@ -407,7 +407,7 @@
     } else if (field === 'link') {
       const url = els.streamUrl.textContent;
       const pwd = els.streamPassword.textContent;
-      text = url + '?p=' + encodeURIComponent(pwd);
+      text = url + '#' + pwd;
     } else {
       text = els.streamPassword.textContent;
     }

@@ -107,7 +107,7 @@ function updateTrayMenu(): void {
         label: 'Copy Link (auto-connect)',
         click: () =>
           clipboard.writeText(
-            `${status.url}?p=${encodeURIComponent(status.password!)}`,
+            `${status.url}#${status.password!}`,
           ),
       });
     }

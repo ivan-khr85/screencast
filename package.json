@@ -9,7 +9,8 @@
   },
   "type": "module",
   "scripts": {
-    "build": "tsc && npm run copy-assets",
+    "build": "tsc && npm run build:electron && npm run copy-assets",
+    "build:electron": "esbuild electron/main.ts --bundle --platform=node --format=cjs --outfile=dist/electron/main.cjs --external:electron --sourcemap --define:import.meta.url=import_meta_url --banner:js=\"var import_meta_url=require('url').pathToFileURL(__filename).href;\"",
     "copy-assets": "cp src/viewer.html dist/src/viewer.html && mkdir -p dist/electron/ui && cp electron/ui/index.html dist/electron/ui/index.html",
     "start": "npm run build && node dist/bin/cli.js",
     "dev": "tsx bin/cli.ts",
@@ -66,8 +67,8 @@
   "devDependencies": {
     "@types/node": "^25.3.3",
     "@types/ws": "^8.18.1",
-    "electron": "^33.0.0",
-    "electron-builder": "^25.0.0",
+    "electron": "^40.7.0",
+    "electron-builder": "^26.8.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
