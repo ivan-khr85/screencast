@@ -358,6 +358,11 @@
     audioNote: document.getElementById('audio-note'),
   };
 
+  const LATENCY_BITRATES = { 'ultra-low': '15000k', 'medium': '10000k', 'slow': '5000k' };
+  document.getElementById('latency').addEventListener('change', function() {
+    document.getElementById('bitrate').value = LATENCY_BITRATES[this.value] || '10000k';
+  });
+
   // Load initial status
   window.api.getStatus().then(updateUI);
 

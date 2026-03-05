@@ -11,6 +11,7 @@ import {
 } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFile, spawn as cpSpawn } from 'node:child_process';
 
 // macOS GUI apps don't inherit the shell PATH, so Homebrew binaries
 // (ffmpeg, cloudflared) aren't found. Prepend common install locations.
@@ -32,6 +33,125 @@ import { detectBlackHole } from '../src/audio-setup.js';
 import { DEFAULTS, LATENCY_PRESETS, LatencyMode } from '../src/constants.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// --- Readiness Check & Auto-Prepare ---
+
+interface ReadinessResult {
+  ready: boolean;
+  hasBrew: boolean;
+  hasFFmpeg: boolean;
+  hasBlackHole: boolean;
+  hasCloudflared: boolean;
+  screenRecording: 'granted' | 'denied' | 'unknown';
+}
+
+function commandExists(cmd: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile('which', [cmd], (err) => resolve(!err));
+  });
+}
+
+async function checkReadiness(): Promise<ReadinessResult> {
+  const [hasBrew, hasFFmpeg, hasCloudflared] = await Promise.all([
+    commandExists('brew'),
+    commandExists('ffmpeg'),
+    commandExists('cloudflared'),
+  ]);
+
+  let hasBlackHole = false;
+  try {
+    const { audioDevices } = await listDevices();
+    hasBlackHole = audioDevices.some((d) => d.name.includes('BlackHole'));
+  } catch {
+    // ffmpeg not installed yet — can't list devices
+  }
+
+  let screenRecording: 'granted' | 'denied' | 'unknown' = 'unknown';
+  if (process.platform === 'darwin') {
+    const access = systemPreferences.getMediaAccessStatus('screen');
+    screenRecording = access === 'denied' ? 'denied' : 'granted';
+  }
+
+  return {
+    ready: hasFFmpeg && hasBlackHole && hasCloudflared && screenRecording !== 'denied',
+    hasBrew,
+    hasFFmpeg,
+    hasBlackHole,
+    hasCloudflared,
+    screenRecording,
+  };
+}
+
+function brewInstall(formula: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const proc = cpSpawn('brew', ['install', formula], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    proc.stdout!.on('data', (d: Buffer) => { stdout += d.toString(); });
+    proc.stderr!.on('data', (d: Buffer) => { stderr += d.toString(); });
+    proc.on('close', (code) => {
+      if (code === 0) resolve(stdout);
+      else reject(new Error(`brew install ${formula} failed (exit ${code}): ${stderr}`));
+    });
+    proc.on('error', reject);
+  });
+}
+
+async function autoSetup(
+  sendProgress: (msg: string) => void,
+): Promise<ReadinessResult> {
+  const initial = await checkReadiness();
+
+  if (!initial.hasBrew) {
+    sendProgress('Homebrew is not installed. Please install it from https://brew.sh first.');
+    return initial;
+  }
+
+  if (!initial.hasFFmpeg) {
+    sendProgress('Installing ffmpeg...');
+    try {
+      await brewInstall('ffmpeg');
+      sendProgress('ffmpeg installed.');
+    } catch (err) {
+      sendProgress(`Failed to install ffmpeg: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  if (!initial.hasBlackHole) {
+    sendProgress('Installing BlackHole audio driver...');
+    try {
+      await brewInstall('blackhole-2ch');
+      sendProgress('BlackHole installed. A Multi-Output Device may need to be configured in Audio MIDI Setup.');
+    } catch (err) {
+      sendProgress(`Failed to install BlackHole: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  if (!initial.hasCloudflared) {
+    sendProgress('Installing cloudflared...');
+    try {
+      await brewInstall('cloudflared');
+      sendProgress('cloudflared installed.');
+    } catch (err) {
+      sendProgress(`Failed to install cloudflared: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  if (initial.screenRecording === 'denied') {
+    sendProgress('Screen Recording permission required. Opening System Settings...');
+    shell.openExternal(
+      'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
+    );
+  }
+
+  const result = await checkReadiness();
+  if (result.ready) {
+    sendProgress('All dependencies are ready!');
+  }
+  return result;
+}
 
 interface StreamConfig {
   port: number;
@@ -189,13 +309,14 @@ async function startStream(config: StreamConfig): Promise<void> {
     gopSize,
     resolution: config.quality,
   });
-  capture.on('data', (chunk) => server!.pushData(chunk));
-  capture.on('restart', () => server!.resetParser());
+  capture.on('data', (chunk) => server?.pushData(chunk));
+  capture.on('restart', () => server?.resetParser());
   capture.on('error', (err: Error) => {
     status.error = `FFmpeg: ${err.message}`;
     pushStatus();
   });
   capture.on('log', (msg: string) => {
+    if (/^(Starting ffmpeg:|ffmpeg args:|First ffmpeg output:)/.test(msg)) return;
     if (/error|fatal|denied|permission/i.test(msg)) {
       status.error = `FFmpeg: ${msg}`;
       pushStatus();
@@ -350,6 +471,17 @@ ipcMain.handle('devices:list', async () => {
 
 ipcMain.handle('clipboard:copy', (_event, text: string) => {
   clipboard.writeText(text);
+});
+
+ipcMain.handle('system:check-readiness', async () => {
+  return await checkReadiness();
+});
+
+ipcMain.handle('system:auto-setup', async (event) => {
+  const sendProgress = (msg: string) => {
+    event.sender.send('system:setup-progress', msg);
+  };
+  return await autoSetup(sendProgress);
 });
 
 // --- App Lifecycle ---
