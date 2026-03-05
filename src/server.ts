@@ -39,6 +39,9 @@ export class StreamServer {
 
     this.#wss = new WebSocketServer({ server: this.#httpServer });
     this.#wss.on('connection', (ws) => this.#handleConnection(ws));
+    this.#wss.on('error', () => {
+      // Handled by the HTTP server's error listener in listen()
+    });
   }
 
   get viewerCount(): number {
@@ -155,8 +158,12 @@ export class StreamServer {
   }
 
   listen(port: number): Promise<void> {
-    return new Promise((resolve) => {
-      this.#httpServer.listen(port, () => resolve());
+    return new Promise((resolve, reject) => {
+      this.#httpServer.once('error', reject);
+      this.#httpServer.listen(port, () => {
+        this.#httpServer.removeListener('error', reject);
+        resolve();
+      });
     });
   }
 

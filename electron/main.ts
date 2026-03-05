@@ -6,9 +6,24 @@ import {
   Menu,
   nativeImage,
   clipboard,
+  systemPreferences,
+  shell,
 } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+// macOS GUI apps don't inherit the shell PATH, so Homebrew binaries
+// (ffmpeg, cloudflared) aren't found. Prepend common install locations.
+if (process.platform === 'darwin') {
+  const extraPaths = [
+    '/opt/homebrew/bin',
+    '/opt/homebrew/sbin',
+    '/usr/local/bin',
+    '/usr/local/sbin',
+    '/opt/local/bin',
+  ];
+  process.env.PATH = [...extraPaths, process.env.PATH].join(':');
+}
 import { Capture, listDevices } from '../src/capture.js';
 import { StreamServer } from '../src/server.js';
 import { generatePassword } from '../src/auth.js';
@@ -87,6 +102,15 @@ function updateTrayMenu(): void {
         click: () => clipboard.writeText(status.password!),
       });
     }
+    if (status.url && status.password) {
+      template.push({
+        label: 'Copy Link (auto-connect)',
+        click: () =>
+          clipboard.writeText(
+            `${status.url}?p=${encodeURIComponent(status.password!)}`,
+          ),
+      });
+    }
     template.push({
       label: `Viewers: ${status.viewers}/${status.maxViewers}`,
       enabled: false,
@@ -117,6 +141,19 @@ function updateTrayMenu(): void {
 async function startStream(config: StreamConfig): Promise<void> {
   if (status.running) return;
 
+  // Check screen recording permission on macOS
+  if (process.platform === 'darwin') {
+    const screenAccess = systemPreferences.getMediaAccessStatus('screen');
+    if (screenAccess === 'denied') {
+      shell.openExternal(
+        'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
+      );
+      throw new Error(
+        'Screen Recording permission is required. Grant access to Screencast in System Settings, then try again.',
+      );
+    }
+  }
+
   const { screens } = await listDevices();
   const screenDevices = screens.filter((d) =>
     /capture screen|screen/i.test(d.name),
@@ -146,6 +183,16 @@ async function startStream(config: StreamConfig): Promise<void> {
   });
   capture.on('data', (chunk) => server!.pushData(chunk));
   capture.on('restart', () => server!.resetParser());
+  capture.on('error', (err: Error) => {
+    status.error = `FFmpeg: ${err.message}`;
+    pushStatus();
+  });
+  capture.on('log', (msg: string) => {
+    if (/error|fatal|denied|permission/i.test(msg)) {
+      status.error = `FFmpeg: ${msg}`;
+      pushStatus();
+    }
+  });
   capture.start(selectedScreen.index, audioDevice);
 
   let url = `http://localhost:${port}`;

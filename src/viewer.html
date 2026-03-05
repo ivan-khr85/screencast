@@ -136,6 +136,16 @@
     return `${proto}//${location.host}`;
   }
 
+  // Auto-connect if password is in query params (?p=...)
+  const urlParams = new URLSearchParams(location.search);
+  const autoPassword = urlParams.get('p');
+  if (autoPassword) {
+    password = autoPassword;
+    // Clean the password from the URL bar so it's not visible/shared accidentally
+    history.replaceState(null, '', location.pathname);
+    connect();
+  }
+
   authForm.addEventListener('submit', (e) => {
     e.preventDefault();
     password = passwordInput.value.trim();

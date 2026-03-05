@@ -15,7 +15,8 @@
     "electron:dev": "npm run build && electron .",
     "electron:build": "npm run build && electron-builder",
     "electron:build:mac": "npm run electron:build -- --mac",
-    "electron:build:win": "npm run electron:build -- --win"
+    "electron:build:win": "npm run electron:build -- --win",
+    "setup": "bash setup-mac.sh"
   },
   "engines": {
     "node": ">=20.0.0"

@@ -291,6 +291,9 @@
         <span id="stream-password" class="info-value"></span>
         <button class="btn-copy" onclick="copyField('password', this)">Copy</button>
       </div>
+      <div class="info-row" style="margin-top: 12px; justify-content: center;">
+        <button class="btn-copy" style="padding: 6px 16px; font-size: 12px; color: #4a9eff; border-color: #4a9eff44;" onclick="copyField('link', this)">Copy Link (auto-connect)</button>
+      </div>
     </div>
 
     <div class="section">
@@ -398,9 +401,16 @@
   };
 
   window.copyField = function(field, btnEl) {
-    const text = field === 'url'
-      ? els.streamUrl.textContent
-      : els.streamPassword.textContent;
+    let text;
+    if (field === 'url') {
+      text = els.streamUrl.textContent;
+    } else if (field === 'link') {
+      const url = els.streamUrl.textContent;
+      const pwd = els.streamPassword.textContent;
+      text = url + '?p=' + encodeURIComponent(pwd);
+    } else {
+      text = els.streamPassword.textContent;
+    }
     window.api.copyToClipboard(text);
     const original = btnEl.textContent;
     btnEl.textContent = 'Copied!';
