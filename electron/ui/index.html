@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Screencast</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0a0a0a;
+    color: #e0e0e0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    font-size: 13px;
+    user-select: none;
+    overflow: hidden;
+  }
+
+  /* macOS hidden title bar drag region */
+  .titlebar {
+    -webkit-app-region: drag;
+    height: 38px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding-bottom: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #888;
+    letter-spacing: 0.3px;
+  }
+
+  .container {
+    padding: 0 20px 20px;
+    height: calc(100vh - 38px);
+    overflow-y: auto;
+  }
+
+  h1 {
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 16px;
+    color: #fff;
+  }
+
+  .section {
+    background: #1a1a1a;
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 14px;
+  }
+
+  .section-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #666;
+    margin-bottom: 12px;
+  }
+
+  .field {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 32px;
+    margin-bottom: 6px;
+  }
+  .field:last-child { margin-bottom: 0; }
+
+  .field label {
+    font-size: 13px;
+    color: #bbb;
+  }
+
+  .field input[type="text"],
+  .field input[type="number"] {
+    width: 110px;
+    padding: 5px 8px;
+    border: 1px solid #333;
+    border-radius: 6px;
+    background: #0a0a0a;
+    color: #e0e0e0;
+    font-size: 13px;
+    outline: none;
+    text-align: right;
+    font-family: 'SF Mono', Menlo, monospace;
+  }
+  .field input:focus { border-color: #4a9eff; }
+  .field input:disabled { opacity: 0.4; }
+
+  /* Toggle switch */
+  .toggle {
+    position: relative;
+    width: 38px;
+    height: 22px;
+    flex-shrink: 0;
+  }
+  .toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+    position: absolute;
+  }
+  .toggle .slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: #333;
+    border-radius: 11px;
+    transition: background 0.2s;
+  }
+  .toggle .slider::before {
+    content: "";
+    position: absolute;
+    height: 18px;
+    width: 18px;
+    left: 2px;
+    bottom: 2px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform 0.2s;
+  }
+  .toggle input:checked + .slider { background: #4a9eff; }
+  .toggle input:checked + .slider::before { transform: translateX(16px); }
+  .toggle input:disabled + .slider { opacity: 0.4; cursor: default; }
+
+  /* Buttons */
+  .btn {
+    width: 100%;
+    padding: 12px;
+    border: none;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, opacity 0.15s;
+    letter-spacing: 0.2px;
+  }
+  .btn:disabled { opacity: 0.5; cursor: default; }
+
+  .btn-start { background: #22c55e; color: #fff; }
+  .btn-start:hover:not(:disabled) { background: #16a34a; }
+
+  .btn-stop { background: #ef4444; color: #fff; }
+  .btn-stop:hover:not(:disabled) { background: #dc2626; }
+
+  .error {
+    color: #ef4444;
+    font-size: 12px;
+    margin-top: 10px;
+    text-align: center;
+    line-height: 1.4;
+  }
+
+  /* Stream info panel */
+  .info-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .info-row:last-child { margin-bottom: 0; }
+
+  .info-label {
+    font-size: 11px;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    width: 70px;
+    flex-shrink: 0;
+  }
+
+  .info-value {
+    flex: 1;
+    font-family: 'SF Mono', Menlo, monospace;
+    font-size: 12px;
+    color: #fff;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .btn-copy {
+    padding: 4px 10px;
+    border: 1px solid #333;
+    border-radius: 5px;
+    background: transparent;
+    color: #888;
+    font-size: 11px;
+    cursor: pointer;
+    flex-shrink: 0;
+    margin-left: 8px;
+    transition: all 0.15s;
+  }
+  .btn-copy:hover { background: #222; color: #fff; border-color: #555; }
+
+  .viewers-display {
+    text-align: center;
+    padding: 10px 0 4px;
+  }
+  .viewers-count {
+    font-size: 32px;
+    font-weight: 700;
+    color: #4a9eff;
+    font-family: 'SF Mono', Menlo, monospace;
+  }
+  .viewers-label {
+    font-size: 11px;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-top: 2px;
+  }
+
+  .audio-note {
+    font-size: 11px;
+    color: #666;
+    text-align: center;
+    margin-top: 6px;
+    font-style: italic;
+  }
+
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="titlebar">Screencast</div>
+
+<div class="container">
+
+  <!-- Settings -->
+  <div id="settings">
+    <div class="section">
+      <div class="section-title">Settings</div>
+      <div class="field">
+        <label>Port</label>
+        <input type="number" id="port" value="8080" min="1024" max="65535">
+      </div>
+      <div class="field">
+        <label>FPS</label>
+        <input type="number" id="fps" value="30" min="1" max="60">
+      </div>
+      <div class="field">
+        <label>Bitrate</label>
+        <input type="text" id="bitrate" value="5000k">
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="text" id="password" placeholder="auto">
+      </div>
+      <div class="field">
+        <label>Max Viewers</label>
+        <input type="number" id="maxViewers" value="5" min="1" max="50">
+      </div>
+      <div class="field">
+        <label>Audio</label>
+        <label class="toggle">
+          <input type="checkbox" id="audio" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="field">
+        <label>Public Tunnel</label>
+        <label class="toggle">
+          <input type="checkbox" id="tunnel" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <!-- Control Button -->
+  <button id="startBtn" class="btn btn-start" onclick="toggleStream()">
+    Start Stream
+  </button>
+
+  <div id="error" class="error hidden"></div>
+
+  <!-- Stream Info (shown when streaming) -->
+  <div id="stream-info" class="hidden">
+    <div class="section" style="margin-top: 14px;">
+      <div class="section-title">Stream Info</div>
+      <div class="info-row">
+        <span class="info-label">URL</span>
+        <span id="stream-url" class="info-value"></span>
+        <button class="btn-copy" onclick="copyField('url', this)">Copy</button>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Password</span>
+        <span id="stream-password" class="info-value"></span>
+        <button class="btn-copy" onclick="copyField('password', this)">Copy</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="viewers-display">
+        <div id="viewer-count" class="viewers-count">0 / 5</div>
+        <div class="viewers-label">Viewers</div>
+      </div>
+    </div>
+
+    <div id="audio-note" class="audio-note hidden">
+      No audio device detected
+    </div>
+  </div>
+
+</div>
+
+<script>
+(function() {
+  let streaming = false;
+
+  const els = {
+    settings: document.getElementById('settings'),
+    startBtn: document.getElementById('startBtn'),
+    error: document.getElementById('error'),
+    streamInfo: document.getElementById('stream-info'),
+    streamUrl: document.getElementById('stream-url'),
+    streamPassword: document.getElementById('stream-password'),
+    viewerCount: document.getElementById('viewer-count'),
+    audioNote: document.getElementById('audio-note'),
+  };
+
+  // Load initial status
+  window.api.getStatus().then(updateUI);
+
+  // Listen for live updates
+  window.api.onStatusUpdate(updateUI);
+
+  function updateUI(status) {
+    streaming = status.running;
+
+    if (streaming) {
+      els.startBtn.textContent = 'Stop Stream';
+      els.startBtn.className = 'btn btn-stop';
+      els.startBtn.disabled = false;
+      els.settings.classList.add('hidden');
+      els.streamInfo.classList.remove('hidden');
+      els.error.classList.add('hidden');
+
+      els.streamUrl.textContent = status.url || '';
+      els.streamPassword.textContent = status.password || '';
+      els.viewerCount.textContent = `${status.viewers} / ${status.maxViewers}`;
+
+      if (!status.hasAudio) {
+        els.audioNote.classList.remove('hidden');
+      } else {
+        els.audioNote.classList.add('hidden');
+      }
+    } else {
+      els.startBtn.textContent = 'Start Stream';
+      els.startBtn.className = 'btn btn-start';
+      els.startBtn.disabled = false;
+      els.settings.classList.remove('hidden');
+      els.streamInfo.classList.add('hidden');
+
+      if (status.error) {
+        els.error.textContent = status.error;
+        els.error.classList.remove('hidden');
+      } else {
+        els.error.classList.add('hidden');
+      }
+    }
+  }
+
+  // Expose toggleStream globally for onclick
+  window.toggleStream = async function() {
+    const btn = els.startBtn;
+
+    if (streaming) {
+      btn.disabled = true;
+      btn.textContent = 'Stopping...';
+      await window.api.stopStream();
+    } else {
+      btn.disabled = true;
+      btn.textContent = 'Starting...';
+
+      const config = {
+        port: parseInt(document.getElementById('port').value, 10),
+        fps: parseInt(document.getElementById('fps').value, 10),
+        bitrate: document.getElementById('bitrate').value,
+        password: document.getElementById('password').value,
+        maxViewers: parseInt(document.getElementById('maxViewers').value, 10),
+        audio: document.getElementById('audio').checked,
+        tunnel: document.getElementById('tunnel').checked,
+      };
+
+      const result = await window.api.startStream(config);
+
+      if (!result.success) {
+        els.error.textContent = result.error;
+        els.error.classList.remove('hidden');
+        btn.disabled = false;
+        btn.textContent = 'Start Stream';
+      }
+    }
+  };
+
+  window.copyField = function(field, btnEl) {
+    const text = field === 'url'
+      ? els.streamUrl.textContent
+      : els.streamPassword.textContent;
+    window.api.copyToClipboard(text);
+    const original = btnEl.textContent;
+    btnEl.textContent = 'Copied!';
+    setTimeout(() => { btnEl.textContent = original; }, 1200);
+  };
+})();
+</script>
+</body>
+</html>

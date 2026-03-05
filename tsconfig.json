@@ -14,6 +14,6 @@
     "resolveJsonModule": true,
     "isolatedModules": true
   },
-  "include": ["bin/**/*.ts", "src/**/*.ts"],
+  "include": ["bin/**/*.ts", "src/**/*.ts", "electron/**/*.ts", "electron/**/*.cts"],
   "exclude": ["node_modules", "dist"]
 }

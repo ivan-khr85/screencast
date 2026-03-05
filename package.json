@@ -2,17 +2,57 @@
   "name": "screencast",
   "version": "1.0.0",
   "description": "Stream your macOS screen + audio to friends via browser",
+  "main": "dist/electron/main.js",
   "bin": {
     "screencast": "./dist/bin/cli.js"
   },
   "type": "module",
   "scripts": {
-    "build": "tsc && cp src/viewer.html dist/src/viewer.html",
+    "build": "tsc && npm run copy-assets",
+    "copy-assets": "cp src/viewer.html dist/src/viewer.html && mkdir -p dist/electron/ui && cp electron/ui/index.html dist/electron/ui/index.html",
     "start": "npm run build && node dist/bin/cli.js",
-    "dev": "tsx bin/cli.ts"
+    "dev": "tsx bin/cli.ts",
+    "electron:dev": "npm run build && electron .",
+    "electron:build": "npm run build && electron-builder",
+    "electron:build:mac": "npm run electron:build -- --mac",
+    "electron:build:win": "npm run electron:build -- --win"
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "build": {
+    "appId": "com.screencast.app",
+    "productName": "Screencast",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "!dist/**/*.map"
+    ],
+    "extraResources": [
+      {
+        "from": "resources",
+        "to": "."
+      }
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.utilities"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "allowToChangeInstallationDirectory": false
+    }
   },
   "dependencies": {
     "commander": "^12.1.0",
@@ -22,6 +62,8 @@
   "devDependencies": {
     "@types/node": "^25.3.3",
     "@types/ws": "^8.18.1",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }

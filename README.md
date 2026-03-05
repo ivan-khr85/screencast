@@ -65,26 +65,49 @@ cd screencast
 npm install
 ```
 
-Or run directly:
+## Desktop App
+
+A native Electron desktop app provides a GUI to start/stop/control and share your stream. No terminal needed.
 
 ```bash
-node bin/cli.js
+# Run the desktop app in development
+npm run electron:dev
+
+# Build distributable for macOS (.dmg + .zip)
+npm run electron:build:mac
+
+# Build distributable for Windows (.exe installer + portable)
+npm run electron:build:win
 ```
 
-## Usage
+The app features:
+
+- **Control panel** — configure port, FPS, bitrate, password, max viewers, audio, and tunnel settings
+- **System tray** — minimize to tray while streaming; quick access to copy URL/password, stop stream
+- **Live viewer count** — see connected viewers in real time
+- **One-click copy** — copy the stream URL and password to clipboard
+
+> **Note:** Screen capture uses macOS AVFoundation. The Windows build target is available, but a Windows-specific capture backend (`gdigrab`/`dshow`) would need to be implemented for full Windows support.
+
+## CLI Usage
+
+The original CLI is still available for terminal-based usage:
 
 ```bash
 # Basic — auto-detects screen, shares via tunnel with auto-generated password
-node bin/cli.js
+npm start
+
+# Development mode (no build step)
+npm run dev
 
 # LAN only, no audio
-node bin/cli.js --no-tunnel --no-audio
+npm start -- --no-tunnel --no-audio
 
 # Custom settings
-node bin/cli.js --port 9000 --fps 15 --bitrate 3000k --password mysecret --max-viewers 10
+npm start -- --port 9000 --fps 15 --bitrate 3000k --password mysecret --max-viewers 10
 
 # List available capture devices
-node bin/cli.js --list-devices
+npm start -- --list-devices
 ```
 
 Once running, you'll see:
@@ -121,16 +144,25 @@ Share the **URL** and **password** with your viewers. They open the link in a br
 ```
 screencast/
 ├── bin/
-│   └── cli.js            # CLI entry point, argument parsing, orchestration
+│   └── cli.ts             # CLI entry point, argument parsing, orchestration
 ├── src/
-│   ├── capture.js         # FFmpeg screen/audio capture via AVFoundation
-│   ├── server.js          # HTTP server + WebSocket streaming with mp4frag
-│   ├── auth.js            # Password authentication over WebSocket
-│   ├── tunnel.js          # Cloudflare quick tunnel management
-│   ├── audio-setup.js     # BlackHole detection and setup guide
-│   ├── constants.js       # Default configuration values
-│   └── viewer.html        # Browser-based video player (MSE)
+│   ├── capture.ts          # FFmpeg screen/audio capture via AVFoundation
+│   ├── server.ts           # HTTP server + WebSocket streaming with mp4frag
+│   ├── auth.ts             # Password authentication over WebSocket
+│   ├── tunnel.ts           # Cloudflare quick tunnel management
+│   ├── audio-setup.ts      # BlackHole detection and setup guide
+│   ├── constants.ts        # Default configuration values
+│   └── viewer.html         # Browser-based video player (MSE)
+├── electron/
+│   ├── main.ts             # Electron main process (window, tray, stream management)
+│   ├── preload.cts         # Secure IPC bridge (CommonJS for Electron preload)
+│   └── ui/
+│       └── index.html      # Desktop app control panel UI
+├── resources/
+│   ├── trayTemplate.png    # macOS menu bar tray icon
+│   └── trayTemplate@2x.png
 ├── package.json
+├── tsconfig.json
 └── README.md
 ```
 
@@ -174,7 +206,7 @@ screencast/
 **No audio**
 - Ensure BlackHole is installed: `brew install blackhole-2ch`
 - Verify the Multi-Output Device is set as system output in Audio MIDI Setup
-- Run `node bin/cli.js --list-devices` to confirm BlackHole appears
+- Run `npm start -- --list-devices` to confirm BlackHole appears
 
 **Tunnel not working**
 - Ensure cloudflared is installed: `brew install cloudflared`
