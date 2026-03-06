@@ -1,4 +1,4 @@
-export type LatencyMode = 'ultra-low' | 'medium' | 'slow';
+export type LatencyMode = "ultra-low" | "medium" | "slow";
 
 export interface LatencyPreset {
   gopMultiplier: number;
@@ -8,21 +8,21 @@ export interface LatencyPreset {
 }
 
 export const LATENCY_PRESETS: Record<LatencyMode, LatencyPreset> = {
-  'ultra-low': {
+  "ultra-low": {
     gopMultiplier: 1 / 6,
-    bufsize: '2000k',
+    bufsize: "2000k",
     liveEdgeThreshold: 0.3,
     bufferEvictionSeconds: 2,
   },
-  'medium': {
+  medium: {
     gopMultiplier: 0.5,
-    bufsize: '5000k',
+    bufsize: "5000k",
     liveEdgeThreshold: 1,
     bufferEvictionSeconds: 5,
   },
-  'slow': {
+  slow: {
     gopMultiplier: 2,
-    bufsize: '10000k',
+    bufsize: "10000k",
     liveEdgeThreshold: 3,
     bufferEvictionSeconds: 15,
   },
@@ -50,7 +50,7 @@ export interface Config {
 export const DEFAULTS: Config = {
   port: 8080,
   fps: 60,
-  bitrate: "5000k",
+  bitrate: "15000k",
   maxrate: "26000k",
   bufsize: "5000k",
   audioBitrate: "128k",

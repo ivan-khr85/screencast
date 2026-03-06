@@ -174,7 +174,9 @@
     bottom: 58px;
     right: 14px;
     width: 300px;
-    max-height: 360px;
+    height: 360px;
+    min-width: 240px;
+    min-height: 200px;
     background: rgba(15,15,15,0.92);
     border: 1px solid #333;
     border-radius: 10px;
@@ -183,15 +185,34 @@
     z-index: 30;
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
+    resize: both;
+    overflow: hidden;
   }
   #chat-panel.open { display: flex; }
+
+  #chat-resize-handle {
+    height: 18px;
+    cursor: grab;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    user-select: none;
+  }
+  #chat-resize-handle:active { cursor: grabbing; }
+  #chat-resize-handle::after {
+    content: '';
+    width: 32px;
+    height: 4px;
+    border-radius: 2px;
+    background: #444;
+  }
 
   #chat-messages {
     flex: 1;
     overflow-y: auto;
     padding: 10px 12px;
-    min-height: 120px;
-    max-height: 280px;
+    min-height: 0;
     font-size: 0.82rem;
     line-height: 1.45;
   }
@@ -303,6 +324,7 @@
   <span class="badge" id="chat-badge"></span>
 </button>
 <div id="chat-panel">
+  <div id="chat-resize-handle"></div>
   <div id="chat-name-row">
     <input type="text" id="chat-name-input" placeholder="Enter your name..." maxlength="30" autocomplete="off">
     <button id="chat-name-btn" onclick="setName()">Join</button>
@@ -414,6 +436,41 @@
 
   chatInput?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); window.sendChat(); }
+  });
+
+  // Drag handle to resize chat panel height/width
+  const chatResizeHandle = document.getElementById('chat-resize-handle');
+  let resizing = false;
+  let resizeStartY = 0;
+  let resizeStartX = 0;
+  let resizeStartH = 0;
+  let resizeStartW = 0;
+
+  chatResizeHandle?.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    resizing = true;
+    resizeStartY = e.clientY;
+    resizeStartX = e.clientX;
+    resizeStartH = chatPanel.offsetHeight;
+    resizeStartW = chatPanel.offsetWidth;
+    document.body.style.userSelect = 'none';
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!resizing) return;
+    const dy = resizeStartY - e.clientY;
+    const dx = resizeStartX - e.clientX;
+    const newH = Math.max(200, Math.min(window.innerHeight - 80, resizeStartH + dy));
+    const newW = Math.max(240, Math.min(window.innerWidth - 30, resizeStartW + dx));
+    chatPanel.style.height = newH + 'px';
+    chatPanel.style.width = newW + 'px';
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (resizing) {
+      resizing = false;
+      document.body.style.userSelect = '';
+    }
   });
 
   function addChatMessage(sender, text) {
