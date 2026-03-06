@@ -14,7 +14,7 @@
 
   const LATENCY_BITRATES = { 'ultra-low': '15000k', 'medium': '10000k', 'slow': '5000k' };
   document.getElementById('latency').addEventListener('change', function() {
-    document.getElementById('bitrate').value = LATENCY_BITRATES[this.value] || '10000k';
+    document.getElementById('bitrate').value = LATENCY_BITRATES[this.value] || '15000k';
   });
 
   // Load initial status

@@ -293,7 +293,7 @@ async function startStream(config: StreamConfig): Promise<void> {
 
   const password = config.password || generatePassword();
   const port = config.port;
-  const preset = LATENCY_PRESETS[config.latency] || LATENCY_PRESETS['medium'];
+  const preset = LATENCY_PRESETS[config.latency] || LATENCY_PRESETS['ultra-low'];
   const gopSize = Math.max(2, Math.round(config.fps * preset.gopMultiplier));
 
   server = new StreamServer(password, {

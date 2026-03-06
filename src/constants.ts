@@ -52,16 +52,16 @@ export const DEFAULTS: Config = {
   fps: 60,
   bitrate: "15000k",
   maxrate: "26000k",
-  bufsize: "5000k",
+  bufsize: "2000k",
   audioBitrate: "128k",
   audioSampleRate: 48000,
   audioChannels: 2,
-  gopSize: 15,
+  gopSize: 10,
   resolution: "original",
   maxViewers: 5,
   authTimeout: 5000,
   backpressureLimit: 4 * 1024 * 1024,
-  bufferEvictionSeconds: 3,
-  liveEdgeThreshold: 0.5, // seconds behind live to trigger seek
+  bufferEvictionSeconds: 2,
+  liveEdgeThreshold: 0.3, // seconds behind live to trigger seek
   passwordLength: 4, // bytes → 8 hex chars
 };
