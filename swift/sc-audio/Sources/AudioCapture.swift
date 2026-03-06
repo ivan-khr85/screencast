@@ -73,33 +73,46 @@ final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         guard type == .audio else { return }
         guard sampleBuffer.isValid, sampleBuffer.numSamples > 0 else { return }
 
-        if let blockBuffer = sampleBuffer.dataBuffer {
-            let length = blockBuffer.dataLength
-            var data = Data(count: length)
-            data.withUnsafeMutableBytes { rawPtr in
-                guard let baseAddress = rawPtr.baseAddress else { return }
-                CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: length, destination: baseAddress)
-            }
-            writeData(data)
-            return
-        }
-
         try? sampleBuffer.withAudioBufferList { audioBufferList, _ in
-            for i in 0..<Int(audioBufferList.unsafePointer.pointee.mNumberBuffers) {
-                let buffer: AudioBuffer
-                if i == 0 {
-                    buffer = audioBufferList.unsafePointer.pointee.mBuffers
-                } else {
-                    buffer = withUnsafePointer(to: audioBufferList.unsafePointer.pointee) { ptr in
-                        let bufPtr = UnsafeRawPointer(ptr).advanced(by: MemoryLayout<AudioBufferList>.offset(of: \.mBuffers)!)
-                            .assumingMemoryBound(to: AudioBuffer.self)
-                        return bufPtr[i]
+            let numBuffers = Int(audioBufferList.unsafePointer.pointee.mNumberBuffers)
+
+            if numBuffers <= 1 {
+                // Mono or already-interleaved — write directly
+                let buf = audioBufferList.unsafePointer.pointee.mBuffers
+                if let ptr = buf.mData, buf.mDataByteSize > 0 {
+                    writeData(Data(bytes: ptr, count: Int(buf.mDataByteSize)))
+                }
+                return
+            }
+
+            // SCK delivers non-interleaved (planar) stereo: buffer[0]=L, buffer[1]=R.
+            // FFmpeg expects interleaved f32le (LRLRLR...), so interleave here.
+            // Use unsafePointer directly — do NOT copy via .pointee, which loses all
+            // AudioBuffers past the first (AudioBufferList.mBuffers is a flexible array).
+            let bufPtr = UnsafeRawPointer(audioBufferList.unsafePointer)
+                .advanced(by: MemoryLayout<AudioBufferList>.offset(of: \.mBuffers)!)
+                .assumingMemoryBound(to: AudioBuffer.self)
+
+            var channels: [UnsafePointer<Float32>] = []
+            var frameCount = 0
+            for i in 0..<numBuffers {
+                let buf = bufPtr[i]
+                guard let ptr = buf.mData, buf.mDataByteSize > 0 else { continue }
+                channels.append(ptr.assumingMemoryBound(to: Float32.self))
+                if i == 0 { frameCount = Int(buf.mDataByteSize) / 4 }
+            }
+            guard channels.count == numBuffers, frameCount > 0 else { return }
+
+            var interleaved = Data(count: frameCount * numBuffers * 4)
+            interleaved.withUnsafeMutableBytes { raw in
+                guard let out = raw.baseAddress?.assumingMemoryBound(to: Float32.self) else { return }
+                for f in 0..<frameCount {
+                    for c in 0..<numBuffers {
+                        out[f * numBuffers + c] = channels[c][f]
                     }
                 }
-                if let data = buffer.mData, buffer.mDataByteSize > 0 {
-                    writeData(Data(bytes: data, count: Int(buffer.mDataByteSize)))
-                }
             }
+            writeData(interleaved)
         }
     }
 

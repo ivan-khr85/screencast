@@ -1,6 +1,7 @@
 import { spawn, ChildProcess } from 'node:child_process';
 import dgram from 'node:dgram';
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
 import os from 'node:os';
 import { DEFAULTS, Config, AudioConfig } from './constants.js';
 import { resolveScAudioPath } from './audio-setup.js';
@@ -529,8 +530,19 @@ export class Capture extends EventEmitter {
     });
     this.#audioEncoder = encoder;
 
-    // Pipe sc-audio stdout → FFmpeg stdin
-    scAudio.stdout!.pipe(encoder.stdin!);
+    // Pipe sc-audio stdout → FFmpeg stdin (optionally tee to file for diagnosis)
+    const recordAudioTo = process.env.SCREENCAST_RECORD_AUDIO;
+    if (recordAudioTo) {
+      const fileStream = fs.createWriteStream(recordAudioTo);
+      this.emit('log', `[sc-audio] Recording raw PCM to ${recordAudioTo} (play with: ffplay -f f32le -ar 48000 -ac 2 ${recordAudioTo})`);
+      scAudio.stdout!.on('data', (chunk: Buffer) => {
+        encoder.stdin!.write(chunk);
+        fileStream.write(chunk);
+      });
+      scAudio.stdout!.on('end', () => fileStream.end());
+    } else {
+      scAudio.stdout!.pipe(encoder.stdin!);
+    }
 
     // Forward RTP packets from the UDP socket
     socket.on('message', (msg: Buffer) => {
