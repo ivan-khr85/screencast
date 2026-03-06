@@ -5,28 +5,6 @@ export interface AudioConfig {
   appBundleId?: string;
 }
 
-export type LatencyMode = "ultra-low" | "medium" | "slow";
-
-export interface LatencyPreset {
-  gopMultiplier: number;
-  bufsize: string;
-}
-
-export const LATENCY_PRESETS: Record<LatencyMode, LatencyPreset> = {
-  "ultra-low": {
-    gopMultiplier: 1 / 6,
-    bufsize: "6500k",
-  },
-  medium: {
-    gopMultiplier: 0.5,
-    bufsize: "16250k",
-  },
-  slow: {
-    gopMultiplier: 2,
-    bufsize: "32500k",
-  },
-};
-
 export interface Config {
   port: number;
   fps: number;
@@ -37,7 +15,6 @@ export interface Config {
   audioSampleRate: number;
   audioChannels: number;
   gopSize: number;
-  resolution: string;
   maxViewers: number;
   authTimeout: number;
   passwordLength: number;
@@ -53,7 +30,6 @@ export const DEFAULTS: Config = {
   audioSampleRate: 48000,
   audioChannels: 2,
   gopSize: 10,
-  resolution: "original",
   maxViewers: 5,
   authTimeout: 5000,
   passwordLength: 4, // bytes → 8 hex chars

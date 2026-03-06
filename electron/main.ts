@@ -31,7 +31,7 @@ import { StreamServer } from '../src/server.js';
 import { generatePassword } from '../src/auth.js';
 import { Tunnel } from '../src/tunnel.js';
 import { isScreenCaptureKitAvailable, listAudioApps } from '../src/audio-setup.js';
-import { DEFAULTS, LATENCY_PRESETS, LatencyMode, AudioConfig, AudioMode } from '../src/constants.js';
+import { DEFAULTS, AudioConfig, AudioMode } from '../src/constants.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -144,8 +144,6 @@ interface StreamConfig {
   port: number;
   fps: number;
   bitrate: string;
-  quality: string;
-  latency: LatencyMode;
   password: string;
   maxViewers: number;
   audioMode: AudioMode;
@@ -252,6 +250,7 @@ function updateTrayMenu(): void {
 
 async function startStream(config: StreamConfig): Promise<void> {
   if (status.running) return;
+  console.log('[main] startStream:', JSON.stringify(config));
 
   // Check screen recording permission on macOS
   if (process.platform === 'darwin') {
@@ -269,12 +268,15 @@ async function startStream(config: StreamConfig): Promise<void> {
   let screenIndex: string;
   if (config.screenIndex) {
     screenIndex = config.screenIndex;
+    console.log(`[main] using screenIndex from config: ${screenIndex}`);
   } else {
     const { screens } = await listDevices();
+    console.log('[main] listDevices screens:', JSON.stringify(screens));
     const screenDevices = screens.filter((d) => /capture screen|screen/i.test(d.name));
     const selected = screenDevices[0] || screens[0];
     if (!selected) throw new Error('No screen capture devices found');
     screenIndex = selected.index;
+    console.log(`[main] auto-selected: index=${screenIndex} name="${selected.name}"`);
   }
 
   const audioConfig: AudioConfig = config.audioMode === 'none'
@@ -285,8 +287,7 @@ async function startStream(config: StreamConfig): Promise<void> {
 
   const password = config.password || generatePassword();
   const port = config.port;
-  const preset = LATENCY_PRESETS[config.latency] || LATENCY_PRESETS['ultra-low'];
-  const gopSize = Math.max(2, Math.round(config.fps * preset.gopMultiplier));
+  const gopSize = Math.max(2, Math.round(config.fps / 6));
 
   server = new StreamServer(password, {
     port,
@@ -301,25 +302,29 @@ async function startStream(config: StreamConfig): Promise<void> {
   capture = new Capture({
     fps: config.fps,
     bitrate: config.bitrate,
-    bufsize: preset.bufsize,
     gopSize,
-    resolution: config.quality,
   });
   capture.on('videoRtp', (packet) => server?.pushVideoRtp(packet));
   capture.on('audioRtp', (packet) => server?.pushAudioRtp(packet));
   capture.on('restart', () => server?.resetConnections());
   capture.on('error', (err: Error) => {
+    console.error('[main] capture error:', err.message);
     status.error = `FFmpeg: ${err.message}`;
     pushStatus();
   });
   capture.on('log', (msg: string) => {
-    if (/^(Starting ffmpeg:|ffmpeg args:|First ffmpeg output:)/.test(msg)) return;
+    console.log(`[capture-log] ${msg}`);
+    // Screencapturekit unavailability is expected on this system — the Swift
+    // fallback handles it silently. Don't surface these as UI errors.
+    if (/unknown input format|Error opening input file/i.test(msg)) return;
     if (/error|fatal|denied|permission/i.test(msg)) {
       status.error = `FFmpeg: ${msg}`;
       pushStatus();
     }
   });
+  console.log(`[main] calling capture.start(${screenIndex}, ${JSON.stringify(audioConfig)})`);
   await capture.start(screenIndex, audioConfig);
+  console.log('[main] capture.start() returned');
 
   let url = `http://localhost:${port}`;
   if (config.tunnel) {

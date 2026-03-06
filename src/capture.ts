@@ -65,6 +65,7 @@ export class Capture extends EventEmitter {
 
   async start(screenIndex: string, audio: AudioConfig): Promise<void> {
     this.#stopped = false;
+    console.log(`[capture] start: screenIndex=${screenIndex} audio.mode=${audio.mode} useSck=${useSck()} osRelease=${os.release()}`);
     await this.#spawnVideo(screenIndex);
     if (audio.mode !== 'none') {
       await this.#spawnAudio(audio);
@@ -77,7 +78,7 @@ export class Capture extends EventEmitter {
     const { socket, port } = await bindUdpSocket();
     this.#videoSocket = socket;
 
-    const { fps, bitrate, maxrate, bufsize, gopSize, resolution } = this.#config;
+    const { fps, bitrate, maxrate, bufsize, gopSize } = this.#config;
 
     const sck = useSck();
     const args: string[] = [
@@ -99,15 +100,12 @@ export class Capture extends EventEmitter {
       '-keyint_min', String(gopSize),
       '-profile:v', 'baseline',
       '-an',
+      '-f', 'rtp', `rtp://127.0.0.1:${port}`,
     ];
 
-    if (resolution && resolution !== 'original') {
-      args.push('-vf', `scale=-2:${resolution}`);
-    }
-
-    args.push('-f', 'rtp', `rtp://127.0.0.1:${port}`);
-
     this.emit('log', `Starting ffmpeg: screen=${screenIndex} (RTP to port ${port})`);
+    console.log(`[capture] #spawnVideo: port=${port}`);
+    console.log(`[capture] #spawnVideo: ffmpeg ${args.join(' ')}`);
 
     const proc = spawn('ffmpeg', args, {
       stdio: ['ignore', 'ignore', 'pipe'],
@@ -143,7 +141,10 @@ export class Capture extends EventEmitter {
       const msg = data.toString().trim();
       if (msg) {
         this.emit('log', msg);
-        if (/unknown input format|no such input format|unrecognized input format/i.test(msg)) fatalError = true;
+        if (/unknown input format|no such input format|unrecognized input format/i.test(msg)) {
+          fatalError = true;
+          console.log(`[capture] FATAL detected in FFmpeg stderr: "${msg}"`);
+        }
       }
     });
 
@@ -151,10 +152,19 @@ export class Capture extends EventEmitter {
       clearTimeout(noDataTimer);
       if (this.#stopped) return;
       if (fatalError) {
-        // FFmpeg screencapturekit unavailable at runtime — switch to native Swift capture
+        // FFmpeg screencapturekit unavailable at runtime — switch to native Swift capture.
+        // Delay 2.5s so the audio SCK stream (which retries at 1s) can connect first;
+        // simultaneous SCK startCapture() calls from two processes interfere with each other.
+        console.log('[capture] fatalError → calling #spawnVideoFallback (delayed 2.5s)');
         this.emit('log', 'FFmpeg screencapturekit unavailable, switching to native capture...');
         this.#closeVideoSocket();
-        this.#spawnVideoFallback(screenIndex).catch((err: Error) => this.emit('error', err));
+        setTimeout(() => {
+          if (this.#stopped) return;
+          this.#spawnVideoFallback(screenIndex).catch((err: Error) => {
+            console.error('[capture] #spawnVideoFallback error:', err);
+            this.emit('error', err);
+          });
+        }, 2500);
         return;
       }
       this.emit('log', `FFmpeg exited with code ${code}, restarting...`);
@@ -174,9 +184,10 @@ export class Capture extends EventEmitter {
     const { socket, port } = await bindUdpSocket();
     this.#videoSocket = socket;
 
-    const { fps, bitrate, bufsize, gopSize, resolution } = this.#config;
+    const { fps, bitrate, bufsize, gopSize } = this.#config;
 
     const binPath = resolveScAudioPath();
+    console.log(`[capture] #spawnVideoFallback: sc-audio path=${binPath ?? 'NOT FOUND'}`);
     if (!binPath) {
       this.emit('error', new Error('sc-audio not found; cannot capture screen'));
       return;
@@ -184,6 +195,7 @@ export class Capture extends EventEmitter {
 
     const displayIndex = parseInt(screenIndex, 10) || 0;
     this.emit('log', `Starting sc-video fallback: display=${displayIndex} fps=${fps}`);
+    console.log(`[capture] #spawnVideoFallback: display=${displayIndex} fps=${fps}`);
 
     const scVideo = spawn(binPath, ['capture-screen', '--display', String(displayIndex), '--fps', String(fps)], {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -191,25 +203,37 @@ export class Capture extends EventEmitter {
     this.#process = scVideo;
 
     // Wait for JSON header line on stderr: {"width":W,"height":H}\n
-    const dims = await new Promise<{ width: number; height: number }>((resolve, reject) => {
-      let buf = '';
-      const onData = (chunk: Buffer) => {
-        buf += chunk.toString();
-        const nl = buf.indexOf('\n');
-        if (nl === -1) return;
-        const line = buf.slice(0, nl);
-        scVideo.stderr!.removeListener('data', onData);
-        try {
-          const parsed = JSON.parse(line);
-          resolve({ width: parsed.width, height: parsed.height });
-        } catch {
-          reject(new Error(`sc-video: bad header: ${line}`));
-        }
-      };
-      scVideo.stderr!.on('data', onData);
-      scVideo.once('close', (code) => reject(new Error(`sc-video exited early (code ${code})`)));
-      scVideo.once('error', reject);
-    });
+    let dims: { width: number; height: number };
+    try {
+      dims = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+        let buf = '';
+        const onData = (chunk: Buffer) => {
+          buf += chunk.toString();
+          const nl = buf.indexOf('\n');
+          if (nl === -1) return;
+          const line = buf.slice(0, nl);
+          scVideo.stderr!.removeListener('data', onData);
+          try {
+            const parsed = JSON.parse(line);
+            resolve({ width: parsed.width, height: parsed.height });
+          } catch {
+            reject(new Error(`sc-video: bad header: ${line}`));
+          }
+        };
+        scVideo.stderr!.on('data', onData);
+        scVideo.once('close', (code) => reject(new Error(`sc-video exited early (code ${code})`)));
+        scVideo.once('error', reject);
+      });
+    } catch (err) {
+      // Transient SCK error on startup (e.g. "application connection interrupted").
+      // Retry like the audio pipeline does instead of treating it as fatal.
+      if (this.#stopped) { if (scVideo.exitCode === null) scVideo.kill(); return; }
+      if (scVideo.exitCode === null) scVideo.kill();
+      this.#closeVideoSocket();
+      this.emit('log', `sc-video startup failed (${(err as Error).message}), retrying...`);
+      setTimeout(() => this.#spawnVideoFallback(screenIndex), 2500);
+      return;
+    }
 
     if (this.#stopped) { scVideo.kill(); return; }
 
@@ -220,6 +244,7 @@ export class Capture extends EventEmitter {
     });
 
     const videoSize = `${dims.width}x${dims.height}`;
+    console.log(`[capture] sc-video header received: ${videoSize}`);
     this.emit('log', `sc-video: ${videoSize}, starting encoder`);
 
     const ffmpegArgs: string[] = [
@@ -243,10 +268,8 @@ export class Capture extends EventEmitter {
       '-an',
     ];
 
-    if (resolution && resolution !== 'original') {
-      ffmpegArgs.push('-vf', `scale=-2:${resolution}`);
-    }
     ffmpegArgs.push('-f', 'rtp', `rtp://127.0.0.1:${port}`);
+    console.log(`[capture] encoder: ffmpeg ${ffmpegArgs.join(' ')}`);
 
     const encoder = spawn('ffmpeg', ffmpegArgs, { stdio: ['pipe', 'ignore', 'pipe'] });
     this.#videoEncoder = encoder;
@@ -263,7 +286,12 @@ export class Capture extends EventEmitter {
       }
     }, 5000);
     socket.once('message', () => {
-      if (!gotData) { gotData = true; clearTimeout(noDataTimer); this.emit('log', 'First video RTP packet received'); }
+      if (!gotData) {
+        gotData = true;
+        clearTimeout(noDataTimer);
+        console.log('[capture] #spawnVideoFallback: first RTP packet received!');
+        this.emit('log', 'First video RTP packet received');
+      }
     });
 
     encoder.stderr!.on('data', (d: Buffer) => {
@@ -293,12 +321,14 @@ export class Capture extends EventEmitter {
     if (this.#stopped) return;
 
     const binPath = resolveScAudioPath();
+    console.log(`[capture] #spawnAudio: mode=${audio.mode} sc-audio=${binPath ?? 'NOT FOUND'}`);
     if (!binPath) {
       this.emit('log', 'WARNING: sc-audio helper not found. Audio will be disabled.');
       return;
     }
 
     const { socket, port } = await bindUdpSocket();
+    console.log(`[capture] #spawnAudio: Opus RTP port=${port}`);
     this.#audioSocket = socket;
 
     const helperArgs = ['capture'];

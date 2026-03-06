@@ -54,11 +54,6 @@
   els.screenSelect.addEventListener('change', updateDisplayThumb);
   loadScreenSources();
 
-  const LATENCY_BITRATES = { 'ultra-low': '48750k', 'medium': '32500k', 'slow': '16250k' };
-  document.getElementById('latency').addEventListener('change', function() {
-    document.getElementById('bitrate').value = LATENCY_BITRATES[this.value] || '48750k';
-  });
-
   // Audio mode switching — show/hide app picker
   els.audioMode.addEventListener('change', function() {
     if (this.value === 'app') {
@@ -145,8 +140,6 @@
         port: parseInt(document.getElementById('port').value, 10),
         fps: parseInt(document.getElementById('fps').value, 10),
         bitrate: document.getElementById('bitrate').value,
-        quality: document.getElementById('quality').value,
-        latency: document.getElementById('latency').value,
         password: document.getElementById('password').value,
         maxViewers: parseInt(document.getElementById('maxViewers').value, 10),
         audioMode: audioMode,

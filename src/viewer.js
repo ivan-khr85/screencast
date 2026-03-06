@@ -21,6 +21,23 @@
   let isMuted = true; // Start muted (browser autoplay policy)
   let hasAudio = false;
 
+  function logTrackStats() {
+    if (!pc) return;
+    pc.getStats().then((stats) => {
+      stats.forEach((report) => {
+        if (report.type === 'inbound-rtp' && report.kind === 'video') {
+          console.log('[viewer] video inbound-rtp:', {
+            bytesReceived: report.bytesReceived,
+            packetsReceived: report.packetsReceived,
+            packetsLost: report.packetsLost,
+            framesDecoded: report.framesDecoded,
+            framesDropped: report.framesDropped,
+          });
+        }
+      });
+    }).catch(() => {});
+  }
+
   // Chat
   const chatToggle = document.getElementById('chat-toggle');
   const chatPanel = document.getElementById('chat-panel');
@@ -350,23 +367,33 @@
     cleanupPeerConnection();
 
     pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+      ],
     });
 
     pc.ontrack = (event) => {
+      console.log('[viewer] ontrack:', event.track.kind, 'streams:', event.streams.length);
       if (event.track.kind === 'video') {
         if (!video.srcObject) {
           video.srcObject = event.streams[0] || new MediaStream([event.track]);
           video.muted = isMuted;
-          video.play().catch(() => {});
+          video.play().catch((err) => console.warn('[viewer] video.play() rejected:', err));
         }
       } else if (event.track.kind === 'audio' && video.srcObject) {
         video.srcObject.addTrack(event.track);
       }
     };
 
+    pc.onconnectionstatechange = () => {
+      console.log('[viewer] connectionState:', pc?.connectionState);
+    };
+
     pc.oniceconnectionstatechange = () => {
       const state = pc?.iceConnectionState;
+      console.log('[viewer] iceConnectionState:', state);
       if (state === 'failed') {
         showError('WebRTC connection failed. You may be behind a firewall that blocks UDP.');
         setStatus('Connection failed', 'error');
@@ -374,6 +401,8 @@
         setStatus('Reconnecting...', 'reconnecting');
       } else if (state === 'connected' || state === 'completed') {
         setStatus('', '');
+        // Log inbound RTP stats after a short delay
+        setTimeout(() => logTrackStats(), 3000);
       }
     };
 
@@ -382,15 +411,19 @@
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
-      // Wait for ICE gathering to complete so all candidates are in the SDP.
-      // werift (server-side) requires candidates in the answer; trickle ICE
-      // would result in an empty candidate list and ICE negotiation failure.
+      // Wait for ICE gathering to complete (with timeout) so all candidates
+      // are in the SDP. werift requires candidates in the answer SDP.
       await new Promise((resolve) => {
         if (pc.iceGatheringState === 'complete') {
           resolve();
         } else {
+          const timeout = setTimeout(() => {
+            console.warn('[viewer] ICE gathering timed out after 5s, sending partial answer');
+            resolve();
+          }, 5000);
           pc.addEventListener('icegatheringstatechange', function onState() {
             if (pc.iceGatheringState === 'complete') {
+              clearTimeout(timeout);
               pc.removeEventListener('icegatheringstatechange', onState);
               resolve();
             }
