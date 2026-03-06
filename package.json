@@ -1,6 +1,6 @@
 {
   "name": "screencast",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Stream your macOS screen + audio to friends via browser",
   "author": "Ivan Khr",
   "main": "dist/electron/main.cjs",
