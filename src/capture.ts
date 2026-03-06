@@ -129,7 +129,7 @@ export class Capture extends EventEmitter {
     const sck = useSck();
     const args: string[] = [
       '-hide_banner', '-loglevel', 'error',
-      '-thread_queue_size', '512',
+      '-thread_queue_size', '16',
       '-f', sck ? 'screencapturekit' : 'avfoundation',
       '-capture_cursor', '1',
       '-pixel_format', 'nv12',
@@ -156,7 +156,7 @@ export class Capture extends EventEmitter {
       args.push('-f', 'matroska', recordTo);
       console.log(`[capture] DEBUG recording to ${recordTo} — WebRTC stream inactive`);
     } else {
-      args.push('-f', 'rtp', `rtp://127.0.0.1:${port}`);
+      args.push('-fflags', '+nobuffer', '-f', 'rtp', `rtp://127.0.0.1:${port}`);
     }
 
     this.emit('log', `Starting ffmpeg: screen=${screenIndex} (RTP to port ${port})`);
@@ -305,7 +305,7 @@ export class Capture extends EventEmitter {
 
     const ffmpegArgs: string[] = [
       '-hide_banner', '-loglevel', 'error',
-      '-thread_queue_size', '512',
+      '-thread_queue_size', '16',
       '-f', 'rawvideo',
       '-pixel_format', 'nv12',
       '-video_size', videoSize,
@@ -330,7 +330,7 @@ export class Capture extends EventEmitter {
       ffmpegArgs.push('-f', 'matroska', recordTo);
       console.log(`[capture] DEBUG recording to ${recordTo} — WebRTC stream inactive`);
     } else {
-      ffmpegArgs.push('-f', 'rtp', `rtp://127.0.0.1:${port}`);
+      ffmpegArgs.push('-fflags', '+nobuffer', '-f', 'rtp', `rtp://127.0.0.1:${port}`);
     }
     console.log(`[capture] encoder: ffmpeg ${ffmpegArgs.join(' ')}`);
 
@@ -402,7 +402,7 @@ export class Capture extends EventEmitter {
       encoderPresetArgs = [];
     }
 
-    const args: string[] = ['-hide_banner', '-loglevel', 'error', '-thread_queue_size', '512'];
+    const args: string[] = ['-hide_banner', '-loglevel', 'error', '-thread_queue_size', '16'];
 
     if (ddagrab) {
       // DirectX Desktop Duplication API — GPU-accelerated, per-monitor, Windows 8+
@@ -441,7 +441,7 @@ export class Capture extends EventEmitter {
       args.push('-f', 'matroska', recordTo);
       console.log(`[capture] DEBUG recording to ${recordTo} — WebRTC stream inactive`);
     } else {
-      args.push('-f', 'rtp', `rtp://127.0.0.1:${port}`);
+      args.push('-fflags', '+nobuffer', '-f', 'rtp', `rtp://127.0.0.1:${port}`);
     }
 
     this.emit('log', `Starting ffmpeg (Windows): display=${displayIndex} encoder=${encoder} ddagrab=${ddagrab} RTP port=${port}`);

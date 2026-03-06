@@ -374,6 +374,11 @@
     localPc.ontrack = (event) => {
       console.log('[viewer] ontrack:', event.track.kind, 'streams:', event.streams.length);
       if (event.track.kind === 'video') {
+        // Minimize browser jitter buffer — on a local network there is no packet
+        // reordering, so Chrome's default 200-500ms video buffer is pure latency.
+        if (event.receiver && 'playoutDelayHint' in event.receiver) {
+          event.receiver.playoutDelayHint = 0;
+        }
         if (!video.srcObject) {
           video.srcObject = event.streams[0] || new MediaStream([event.track]);
           video.muted = isMuted;
