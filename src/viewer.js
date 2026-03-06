@@ -24,6 +24,136 @@
   let serverMime = null;
   let streamInfo = { fps: null, bitrate: null, viewers: null };
 
+  // --- Audio via Web Audio API ---
+  let audioCtx = null;
+  let audioWorkletReady = false;
+  let audioWorkletNode = null;
+  let audioGain = null;
+  let audioSampleRate = 48000;
+  let audioChannels = 2;
+  let hasAudio = false;
+  let isMuted = true; // Start muted (browser autoplay policy)
+
+  const WORKLET_CODE = `
+class PCMPlayerProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    // Ring buffer: ~1 second at given sample rate * channels
+    this.ring = new Float32Array(48000 * 2);
+    this.writePos = 0;
+    this.readPos = 0;
+    this.buffered = 0;
+    this.channels = 2;
+
+    this.port.onmessage = (e) => {
+      if (e.data.type === 'config') {
+        this.channels = e.data.channels;
+        this.ring = new Float32Array(e.data.sampleRate * this.channels);
+        this.writePos = 0;
+        this.readPos = 0;
+        this.buffered = 0;
+        return;
+      }
+      const data = e.data;
+      const len = data.length;
+      const ringLen = this.ring.length;
+
+      // If buffer would overflow, drop old data
+      if (this.buffered + len > ringLen) {
+        const excess = (this.buffered + len) - ringLen;
+        this.readPos = (this.readPos + excess) % ringLen;
+        this.buffered -= excess;
+      }
+
+      // Write to ring buffer
+      for (let i = 0; i < len; i++) {
+        this.ring[this.writePos] = data[i];
+        this.writePos = (this.writePos + 1) % ringLen;
+      }
+      this.buffered += len;
+    };
+  }
+
+  process(inputs, outputs) {
+    const output = outputs[0];
+    const outChannels = output.length;
+    const frameSize = output[0].length; // 128 samples per quantum
+    const srcChannels = this.channels;
+    const samplesNeeded = frameSize * srcChannels;
+    const ringLen = this.ring.length;
+
+    if (this.buffered >= samplesNeeded) {
+      for (let i = 0; i < frameSize; i++) {
+        for (let ch = 0; ch < outChannels; ch++) {
+          if (ch < srcChannels) {
+            output[ch][i] = this.ring[this.readPos + ch];
+          }
+        }
+        this.readPos = (this.readPos + srcChannels) % ringLen;
+      }
+      this.buffered -= samplesNeeded;
+    }
+    // If not enough data, outputs stay silent (pre-filled with 0)
+    return true;
+  }
+}
+registerProcessor('pcm-player', PCMPlayerProcessor);
+`;
+
+  async function initAudio() {
+    if (audioCtx) return;
+    try {
+      audioCtx = new AudioContext({ sampleRate: audioSampleRate });
+      const blob = new Blob([WORKLET_CODE], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      await audioCtx.audioWorklet.addModule(url);
+      URL.revokeObjectURL(url);
+
+      audioWorkletNode = new AudioWorkletNode(audioCtx, 'pcm-player', {
+        outputChannelCount: [audioChannels],
+      });
+      audioWorkletNode.port.postMessage({
+        type: 'config',
+        sampleRate: audioSampleRate,
+        channels: audioChannels,
+      });
+
+      audioGain = audioCtx.createGain();
+      audioGain.gain.value = isMuted ? 0 : 1;
+      audioWorkletNode.connect(audioGain);
+      audioGain.connect(audioCtx.destination);
+
+      audioWorkletReady = true;
+    } catch (err) {
+      console.warn('AudioWorklet init failed:', err);
+    }
+  }
+
+  function feedAudio(pcmData) {
+    if (!audioWorkletReady || !audioWorkletNode) return;
+    // Resume AudioContext if suspended (autoplay policy)
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
+    audioWorkletNode.port.postMessage(pcmData, [pcmData.buffer]);
+  }
+
+  function destroyAudio() {
+    if (audioWorkletNode) {
+      audioWorkletNode.disconnect();
+      audioWorkletNode = null;
+    }
+    if (audioGain) {
+      audioGain.disconnect();
+      audioGain = null;
+    }
+    if (audioCtx) {
+      audioCtx.close();
+      audioCtx = null;
+    }
+    audioWorkletReady = false;
+  }
+
   // Chat
   const chatToggle = document.getElementById('chat-toggle');
   const chatPanel = document.getElementById('chat-panel');
@@ -255,6 +385,8 @@
       ws.close();
     }
 
+    destroyAudio();
+
     setStatus('Connecting...', 'reconnecting');
     ws = new WebSocket(getWsUrl());
     ws.binaryType = 'arraybuffer';
@@ -274,7 +406,7 @@
         handleAuthResponse(event.data);
         return;
       }
-      handleSegment(event.data);
+      handleMessage(event.data);
     };
 
     ws.onclose = (e) => {
@@ -344,6 +476,9 @@
     queue = [];
     initSegment = null;
 
+    // Video element is always muted — audio comes from Web Audio API
+    video.muted = true;
+
     dbg('MediaSource created, readyState=' + mediaSource.readyState);
     video.src = URL.createObjectURL(mediaSource);
 
@@ -357,8 +492,8 @@
 
   }
 
-  function handleSegment(data) {
-    // JSON text messages (mime type info)
+  function handleMessage(data) {
+    // JSON text messages
     if (typeof data === 'string') {
       try {
         const msg = JSON.parse(data);
@@ -370,6 +505,12 @@
           streamInfo.bitrate = msg.bitrate || null;
           if (msg.liveEdgeThreshold) LIVE_EDGE_THRESHOLD = msg.liveEdgeThreshold;
           if (msg.bufferEvictionSeconds) BUFFER_EVICTION_SEC = msg.bufferEvictionSeconds;
+          if (msg.hasAudio) {
+            hasAudio = true;
+            audioSampleRate = msg.audioSampleRate || 48000;
+            audioChannels = msg.audioChannels || 2;
+            initAudio();
+          }
           dbg('received stream_info:', JSON.stringify(msg));
         } else if (msg.type === 'viewer_count') {
           streamInfo.viewers = msg.count;
@@ -384,10 +525,23 @@
       return;
     }
 
-    if (!(data instanceof ArrayBuffer)) return;
-    const buf = new Uint8Array(data);
+    if (!(data instanceof ArrayBuffer) || data.byteLength < 1) return;
 
-    // First binary message is the init segment (ftyp + moov)
+    // First byte is the channel tag: 0x00 = video, 0x01 = audio
+    const tag = new Uint8Array(data, 0, 1)[0];
+    const payload = data.slice(1);
+
+    if (tag === 0x01) {
+      // Audio: raw f32le PCM — feed to AudioWorklet
+      const pcm = new Float32Array(payload);
+      feedAudio(pcm);
+      return;
+    }
+
+    // tag === 0x00: video segment
+    const buf = new Uint8Array(payload);
+
+    // First binary video message is the init segment (ftyp + moov)
     if (!initSegment) {
       initSegment = buf;
       dbg('received init segment:', buf.length, 'bytes, MediaSource.readyState=' + mediaSource.readyState);
@@ -512,23 +666,35 @@
     } catch {}
   }, 200);
 
-  // Mute toggle
+  // Mute toggle — controls Web Audio API gain
   const muteToggle = document.getElementById('mute-toggle');
   const iconMuted = document.getElementById('icon-muted');
   const iconUnmuted = document.getElementById('icon-unmuted');
 
   function updateMuteIcon() {
-    iconMuted.style.display = video.muted ? 'block' : 'none';
-    iconUnmuted.style.display = video.muted ? 'none' : 'block';
+    iconMuted.style.display = isMuted ? 'block' : 'none';
+    iconUnmuted.style.display = isMuted ? 'none' : 'block';
   }
 
   window.toggleMute = function() {
-    video.muted = !video.muted;
+    isMuted = !isMuted;
+    if (audioGain) {
+      audioGain.gain.value = isMuted ? 0 : 1;
+    }
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
     updateMuteIcon();
   };
 
   video.addEventListener('click', () => {
-    video.muted = !video.muted;
+    isMuted = !isMuted;
+    if (audioGain) {
+      audioGain.gain.value = isMuted ? 0 : 1;
+    }
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
     updateMuteIcon();
   });
 

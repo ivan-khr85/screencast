@@ -120,6 +120,7 @@ const server = new StreamServer(password, {
   port,
   maxViewers,
 });
+server.setHasAudio(audioConfig.mode !== 'none');
 
 await server.listen(port);
 
@@ -131,6 +132,7 @@ const capture = new Capture({
 });
 
 capture.on('data', (chunk) => server.pushData(chunk));
+capture.on('audio', (chunk) => server.pushAudio(chunk));
 
 capture.on('restart', () => {
   server.resetParser();

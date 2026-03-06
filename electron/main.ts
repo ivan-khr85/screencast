@@ -290,6 +290,7 @@ async function startStream(config: StreamConfig): Promise<void> {
     bufferEvictionSeconds: preset.bufferEvictionSeconds,
   });
   server.setChatEnabled(config.chat !== false);
+  server.setHasAudio(audioConfig.mode !== 'none');
   await server.listen(port);
 
   capture = new Capture({
@@ -300,6 +301,7 @@ async function startStream(config: StreamConfig): Promise<void> {
     resolution: config.quality,
   });
   capture.on('data', (chunk) => server?.pushData(chunk));
+  capture.on('audio', (chunk) => server?.pushAudio(chunk));
   capture.on('restart', () => server?.resetParser());
   capture.on('error', (err: Error) => {
     status.error = `FFmpeg: ${err.message}`;
