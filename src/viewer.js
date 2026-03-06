@@ -38,32 +38,29 @@
 class PCMPlayerProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
-    // Ring buffer: ~1 second at given sample rate * channels
-    this.ring = new Float32Array(48000 * 2);
+    this.channels = 2;
+    // Ring buffer: 200ms at 48kHz stereo — keep small to stay near live
+    this.ring = new Float32Array(48000 * 2 * 0.2);
     this.writePos = 0;
     this.readPos = 0;
     this.buffered = 0;
-    this.channels = 2;
+    // Max buffer before we skip ahead: 60ms worth of interleaved samples
+    this.maxBuffer = 0;
+    this.updateMaxBuffer();
 
     this.port.onmessage = (e) => {
       if (e.data.type === 'config') {
         this.channels = e.data.channels;
-        this.ring = new Float32Array(e.data.sampleRate * this.channels);
+        this.ring = new Float32Array(Math.ceil(e.data.sampleRate * this.channels * 0.2));
         this.writePos = 0;
         this.readPos = 0;
         this.buffered = 0;
+        this.updateMaxBuffer();
         return;
       }
       const data = e.data;
       const len = data.length;
       const ringLen = this.ring.length;
-
-      // If buffer would overflow, drop old data
-      if (this.buffered + len > ringLen) {
-        const excess = (this.buffered + len) - ringLen;
-        this.readPos = (this.readPos + excess) % ringLen;
-        this.buffered -= excess;
-      }
 
       // Write to ring buffer
       for (let i = 0; i < len; i++) {
@@ -71,7 +68,20 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
         this.writePos = (this.writePos + 1) % ringLen;
       }
       this.buffered += len;
+
+      // Live-edge: if buffer exceeds max, skip ahead to stay near real-time
+      if (this.buffered > this.maxBuffer) {
+        const keep = this.channels * 128 * 2; // ~2 render quanta
+        const skip = this.buffered - keep;
+        this.readPos = (this.readPos + skip) % ringLen;
+        this.buffered = keep;
+      }
     };
+  }
+
+  updateMaxBuffer() {
+    // 60ms of interleaved samples
+    this.maxBuffer = Math.ceil(sampleRate * this.channels * 0.06);
   }
 
   process(inputs, outputs) {
@@ -86,7 +96,7 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
       for (let i = 0; i < frameSize; i++) {
         for (let ch = 0; ch < outChannels; ch++) {
           if (ch < srcChannels) {
-            output[ch][i] = this.ring[this.readPos + ch];
+            output[ch][i] = this.ring[(this.readPos + ch) % ringLen];
           }
         }
         this.readPos = (this.readPos + srcChannels) % ringLen;
@@ -361,6 +371,11 @@ registerProcessor('pcm-player', PCMPlayerProcessor);
     return `${proto}//${location.host}`;
   }
 
+  // Mute toggle — controls Web Audio API gain
+  const muteToggle = document.getElementById('mute-toggle');
+  const iconMuted = document.getElementById('icon-muted');
+  const iconUnmuted = document.getElementById('icon-unmuted');
+
   // Auto-connect if password is in the URL hash (#password).
   // Hash fragments are never sent to the server or proxy (Cloudflare),
   // so they survive tunneling and aren't logged.
@@ -386,6 +401,8 @@ registerProcessor('pcm-player', PCMPlayerProcessor);
     }
 
     destroyAudio();
+    hasAudio = false;
+    muteToggle.style.display = 'none';
 
     setStatus('Connecting...', 'reconnecting');
     ws = new WebSocket(getWsUrl());
@@ -445,7 +462,6 @@ registerProcessor('pcm-player', PCMPlayerProcessor);
         reconnectAttempt = 0;
         authScreen.style.display = 'none';
         playerScreen.style.display = 'block';
-        muteToggle.style.display = 'flex';
         setStatus('Connected', 'connected');
         setTimeout(() => setStatus('', ''), 2000);
         initMediaSource();
@@ -509,6 +525,8 @@ registerProcessor('pcm-player', PCMPlayerProcessor);
             hasAudio = true;
             audioSampleRate = msg.audioSampleRate || 48000;
             audioChannels = msg.audioChannels || 2;
+            muteToggle.style.display = 'flex';
+            updateMuteIcon();
             initAudio();
           }
           dbg('received stream_info:', JSON.stringify(msg));
@@ -665,11 +683,6 @@ registerProcessor('pcm-player', PCMPlayerProcessor);
       }
     } catch {}
   }, 200);
-
-  // Mute toggle — controls Web Audio API gain
-  const muteToggle = document.getElementById('mute-toggle');
-  const iconMuted = document.getElementById('icon-muted');
-  const iconUnmuted = document.getElementById('icon-unmuted');
 
   function updateMuteIcon() {
     iconMuted.style.display = isMuted ? 'block' : 'none';

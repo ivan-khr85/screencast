@@ -144,7 +144,7 @@ video {
   padding: 0;
 }
 #mute-toggle:hover { background: rgba(60,60,60,0.95); }
-#mute-toggle svg { width: 20px; height: 20px; fill: #fff; }
+#mute-toggle svg { width: 18px; height: 18px; color: #fff; }
 
 /* Chat */
 #chat-toggle {

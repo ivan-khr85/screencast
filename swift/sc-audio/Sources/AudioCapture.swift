@@ -8,9 +8,6 @@ final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     private var outputHandle: FileHandle
     private let sampleRate: Int
     private let channels: Int
-    private var silenceTimer: DispatchSourceTimer?
-    private var gotAudioRecently = false
-    private let lock = NSLock()
 
     init(outputHandle: FileHandle, sampleRate: Int = 48000, channels: Int = 2) {
         self.outputHandle = outputHandle
@@ -61,44 +58,13 @@ final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         try stream!.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue)
 
         try await stream!.startCapture()
-
-        // Start silence padding timer — writes silence when no real audio arrives
-        startSilenceTimer()
     }
 
     func stop() {
-        silenceTimer?.cancel()
-        silenceTimer = nil
         Task {
             try? await stream?.stopCapture()
             stream = nil
         }
-    }
-
-    // MARK: - Silence Padding
-
-    private func startSilenceTimer() {
-        // 960 samples at 48kHz = 20ms per chunk (matching SCK's default chunk size)
-        let samplesPerChunk = 960
-        let bytesPerSample = 4 // f32le
-        let silenceChunkSize = samplesPerChunk * channels * bytesPerSample
-        let silenceData = Data(count: silenceChunkSize) // all zeros = silence
-
-        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "sc-audio.silence"))
-        timer.schedule(deadline: .now(), repeating: .milliseconds(20))
-        timer.setEventHandler { [weak self] in
-            guard let self else { return }
-            self.lock.lock()
-            let hasAudio = self.gotAudioRecently
-            self.gotAudioRecently = false
-            self.lock.unlock()
-
-            if !hasAudio {
-                self.writeData(silenceData)
-            }
-        }
-        timer.resume()
-        silenceTimer = timer
     }
 
     // MARK: - SCStreamOutput
@@ -106,10 +72,6 @@ final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .audio else { return }
         guard sampleBuffer.isValid, sampleBuffer.numSamples > 0 else { return }
-
-        lock.lock()
-        gotAudioRecently = true
-        lock.unlock()
 
         if let blockBuffer = sampleBuffer.dataBuffer {
             let length = blockBuffer.dataLength
