@@ -24,145 +24,7 @@
   let serverMime = null;
   let streamInfo = { fps: null, bitrate: null, viewers: null };
 
-  // --- Audio via Web Audio API ---
-  let audioCtx = null;
-  let audioWorkletReady = false;
-  let audioWorkletNode = null;
-  let audioGain = null;
-  let audioSampleRate = 48000;
-  let audioChannels = 2;
-  let hasAudio = false;
   let isMuted = true; // Start muted (browser autoplay policy)
-
-  const WORKLET_CODE = `
-class PCMPlayerProcessor extends AudioWorkletProcessor {
-  constructor() {
-    super();
-    this.channels = 2;
-    // Ring buffer: 200ms at 48kHz stereo — keep small to stay near live
-    this.ring = new Float32Array(48000 * 2 * 0.2);
-    this.writePos = 0;
-    this.readPos = 0;
-    this.buffered = 0;
-    // Max buffer before we skip ahead: 60ms worth of interleaved samples
-    this.maxBuffer = 0;
-    this.updateMaxBuffer();
-
-    this.port.onmessage = (e) => {
-      if (e.data.type === 'config') {
-        this.channels = e.data.channels;
-        this.ring = new Float32Array(Math.ceil(e.data.sampleRate * this.channels * 0.2));
-        this.writePos = 0;
-        this.readPos = 0;
-        this.buffered = 0;
-        this.updateMaxBuffer();
-        return;
-      }
-      const data = e.data;
-      const len = data.length;
-      const ringLen = this.ring.length;
-
-      // Write to ring buffer
-      for (let i = 0; i < len; i++) {
-        this.ring[this.writePos] = data[i];
-        this.writePos = (this.writePos + 1) % ringLen;
-      }
-      this.buffered += len;
-
-      // Live-edge: if buffer exceeds max, skip ahead to stay near real-time
-      if (this.buffered > this.maxBuffer) {
-        const keep = this.channels * 128 * 2; // ~2 render quanta
-        const skip = this.buffered - keep;
-        this.readPos = (this.readPos + skip) % ringLen;
-        this.buffered = keep;
-      }
-    };
-  }
-
-  updateMaxBuffer() {
-    // 60ms of interleaved samples
-    this.maxBuffer = Math.ceil(sampleRate * this.channels * 0.06);
-  }
-
-  process(inputs, outputs) {
-    const output = outputs[0];
-    const outChannels = output.length;
-    const frameSize = output[0].length; // 128 samples per quantum
-    const srcChannels = this.channels;
-    const samplesNeeded = frameSize * srcChannels;
-    const ringLen = this.ring.length;
-
-    if (this.buffered >= samplesNeeded) {
-      for (let i = 0; i < frameSize; i++) {
-        for (let ch = 0; ch < outChannels; ch++) {
-          if (ch < srcChannels) {
-            output[ch][i] = this.ring[(this.readPos + ch) % ringLen];
-          }
-        }
-        this.readPos = (this.readPos + srcChannels) % ringLen;
-      }
-      this.buffered -= samplesNeeded;
-    }
-    // If not enough data, outputs stay silent (pre-filled with 0)
-    return true;
-  }
-}
-registerProcessor('pcm-player', PCMPlayerProcessor);
-`;
-
-  async function initAudio() {
-    if (audioCtx) return;
-    try {
-      audioCtx = new AudioContext({ sampleRate: audioSampleRate });
-      const blob = new Blob([WORKLET_CODE], { type: 'application/javascript' });
-      const url = URL.createObjectURL(blob);
-      await audioCtx.audioWorklet.addModule(url);
-      URL.revokeObjectURL(url);
-
-      audioWorkletNode = new AudioWorkletNode(audioCtx, 'pcm-player', {
-        outputChannelCount: [audioChannels],
-      });
-      audioWorkletNode.port.postMessage({
-        type: 'config',
-        sampleRate: audioSampleRate,
-        channels: audioChannels,
-      });
-
-      audioGain = audioCtx.createGain();
-      audioGain.gain.value = isMuted ? 0 : 1;
-      audioWorkletNode.connect(audioGain);
-      audioGain.connect(audioCtx.destination);
-
-      audioWorkletReady = true;
-    } catch (err) {
-      console.warn('AudioWorklet init failed:', err);
-    }
-  }
-
-  function feedAudio(pcmData) {
-    if (!audioWorkletReady || !audioWorkletNode) return;
-    // Resume AudioContext if suspended (autoplay policy)
-    if (audioCtx.state === 'suspended') {
-      audioCtx.resume();
-    }
-    audioWorkletNode.port.postMessage(pcmData, [pcmData.buffer]);
-  }
-
-  function destroyAudio() {
-    if (audioWorkletNode) {
-      audioWorkletNode.disconnect();
-      audioWorkletNode = null;
-    }
-    if (audioGain) {
-      audioGain.disconnect();
-      audioGain = null;
-    }
-    if (audioCtx) {
-      audioCtx.close();
-      audioCtx = null;
-    }
-    audioWorkletReady = false;
-  }
 
   // Chat
   const chatToggle = document.getElementById('chat-toggle');
@@ -371,7 +233,7 @@ registerProcessor('pcm-player', PCMPlayerProcessor);
     return `${proto}//${location.host}`;
   }
 
-  // Mute toggle — controls Web Audio API gain
+  // Mute toggle — controls video.muted
   const muteToggle = document.getElementById('mute-toggle');
   const iconMuted = document.getElementById('icon-muted');
   const iconUnmuted = document.getElementById('icon-unmuted');
@@ -400,8 +262,6 @@ registerProcessor('pcm-player', PCMPlayerProcessor);
       ws.close();
     }
 
-    destroyAudio();
-    hasAudio = false;
     muteToggle.style.display = 'none';
 
     setStatus('Connecting...', 'reconnecting');
@@ -492,8 +352,8 @@ registerProcessor('pcm-player', PCMPlayerProcessor);
     queue = [];
     initSegment = null;
 
-    // Video element is always muted — audio comes from Web Audio API
-    video.muted = true;
+    // Start muted for autoplay policy — user clicks to unmute
+    video.muted = isMuted;
 
     dbg('MediaSource created, readyState=' + mediaSource.readyState);
     video.src = URL.createObjectURL(mediaSource);
@@ -516,19 +376,16 @@ registerProcessor('pcm-player', PCMPlayerProcessor);
         if (msg.type === 'mime') {
           serverMime = msg.mime;
           dbg('received mime:', msg.mime);
+          // Show mute button if stream contains audio
+          if (serverMime && serverMime.includes('mp4a')) {
+            muteToggle.style.display = 'flex';
+            updateMuteIcon();
+          }
         } else if (msg.type === 'stream_info') {
           streamInfo.fps = msg.fps || null;
           streamInfo.bitrate = msg.bitrate || null;
           if (msg.liveEdgeThreshold) LIVE_EDGE_THRESHOLD = msg.liveEdgeThreshold;
           if (msg.bufferEvictionSeconds) BUFFER_EVICTION_SEC = msg.bufferEvictionSeconds;
-          if (msg.hasAudio) {
-            hasAudio = true;
-            audioSampleRate = msg.audioSampleRate || 48000;
-            audioChannels = msg.audioChannels || 2;
-            muteToggle.style.display = 'flex';
-            updateMuteIcon();
-            initAudio();
-          }
           dbg('received stream_info:', JSON.stringify(msg));
         } else if (msg.type === 'viewer_count') {
           streamInfo.viewers = msg.count;
@@ -545,19 +402,7 @@ registerProcessor('pcm-player', PCMPlayerProcessor);
 
     if (!(data instanceof ArrayBuffer) || data.byteLength < 1) return;
 
-    // First byte is the channel tag: 0x00 = video, 0x01 = audio
-    const tag = new Uint8Array(data, 0, 1)[0];
-    const payload = data.slice(1);
-
-    if (tag === 0x01) {
-      // Audio: raw f32le PCM — feed to AudioWorklet
-      const pcm = new Float32Array(payload);
-      feedAudio(pcm);
-      return;
-    }
-
-    // tag === 0x00: video segment
-    const buf = new Uint8Array(payload);
+    const buf = new Uint8Array(data);
 
     // First binary video message is the init segment (ftyp + moov)
     if (!initSegment) {
@@ -691,23 +536,13 @@ registerProcessor('pcm-player', PCMPlayerProcessor);
 
   window.toggleMute = function() {
     isMuted = !isMuted;
-    if (audioGain) {
-      audioGain.gain.value = isMuted ? 0 : 1;
-    }
-    if (audioCtx && audioCtx.state === 'suspended') {
-      audioCtx.resume();
-    }
+    video.muted = isMuted;
     updateMuteIcon();
   };
 
   video.addEventListener('click', () => {
     isMuted = !isMuted;
-    if (audioGain) {
-      audioGain.gain.value = isMuted ? 0 : 1;
-    }
-    if (audioCtx && audioCtx.state === 'suspended') {
-      audioCtx.resume();
-    }
+    video.muted = isMuted;
     updateMuteIcon();
   });
 

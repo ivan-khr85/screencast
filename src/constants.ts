@@ -60,7 +60,7 @@ export const DEFAULTS: Config = {
   bitrate: "48750k",
   maxrate: "84500k",
   bufsize: "6500k",
-  audioBitrate: "415k",
+  audioBitrate: "256k",
   audioSampleRate: 48000,
   audioChannels: 2,
   gopSize: 10,
