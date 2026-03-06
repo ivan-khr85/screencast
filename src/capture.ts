@@ -11,6 +11,47 @@ export function useSck(): boolean {
   return process.platform === 'darwin' && parseInt(os.release().split('.')[0], 10) >= 23;
 }
 
+export function isWindows(): boolean {
+  return process.platform === 'win32';
+}
+
+// Probe FFmpeg for the best available H.264 encoder on this Windows system.
+// Tries hardware encoders first (NVENC → AMF → QSV), falls back to libx264.
+// Result is cached so the probe only runs once per process.
+let _winEncoder: string | undefined;
+async function getWindowsEncoder(): Promise<string> {
+  if (_winEncoder !== undefined) return _winEncoder;
+  for (const enc of ['h264_nvenc', 'h264_amf', 'h264_qsv']) {
+    const ok = await new Promise<boolean>((resolve) => {
+      const p = spawn('ffmpeg', [
+        '-hide_banner', '-loglevel', 'quiet',
+        '-f', 'lavfi', '-i', 'nullsrc=s=64x64:r=1',
+        '-frames:v', '1', '-c:v', enc, '-f', 'null', '-',
+      ], { stdio: ['ignore', 'ignore', 'pipe'] });
+      p.on('close', (code) => resolve(code === 0));
+      p.on('error', () => resolve(false));
+    });
+    if (ok) { _winEncoder = enc; return enc; }
+  }
+  _winEncoder = 'libx264';
+  return 'libx264';
+}
+
+// Check whether FFmpeg was built with the ddagrab filter (DirectX Desktop
+// Duplication API — GPU-accelerated screen capture, Windows 8+, FFmpeg 5+).
+let _hasDdagrab: boolean | undefined;
+async function checkDdagrab(): Promise<boolean> {
+  if (_hasDdagrab !== undefined) return _hasDdagrab;
+  return new Promise((resolve) => {
+    const p = spawn('ffmpeg', ['-hide_banner', '-filters'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    p.stdout!.on('data', (d: Buffer) => { out += d; });
+    p.stderr!.on('data', (d: Buffer) => { out += d; });
+    p.on('close', () => { _hasDdagrab = out.includes('ddagrab'); resolve(_hasDdagrab!); });
+    p.on('error', () => { _hasDdagrab = false; resolve(false); });
+  });
+}
+
 // Returns false if the installed FFmpeg lacks screencapturekit support.
 // FFmpeg 7.0+ (built with ScreenCaptureKit) is required on macOS 15+.
 export function checkSckVideoSupport(): Promise<boolean> {
@@ -74,6 +115,10 @@ export class Capture extends EventEmitter {
 
   async #spawnVideo(screenIndex: string): Promise<void> {
     if (this.#stopped) return;
+    if (isWindows()) {
+      await this.#spawnVideoWindows(screenIndex);
+      return;
+    }
 
     const { socket, port } = await bindUdpSocket();
     this.#videoSocket = socket;
@@ -334,8 +379,116 @@ export class Capture extends EventEmitter {
     });
   }
 
+  async #spawnVideoWindows(screenIndex: string): Promise<void> {
+    if (this.#stopped) return;
+
+    const { socket, port } = await bindUdpSocket();
+    this.#videoSocket = socket;
+
+    const { fps, bitrate, maxrate, bufsize, gopSize } = this.#config;
+    const displayIndex = parseInt(screenIndex, 10) || 0;
+
+    const [encoder, ddagrab] = await Promise.all([getWindowsEncoder(), checkDdagrab()]);
+
+    let encoderPresetArgs: string[];
+    if (encoder === 'libx264') {
+      encoderPresetArgs = ['-preset', 'ultrafast', '-tune', 'zerolatency'];
+    } else if (encoder === 'h264_nvenc') {
+      encoderPresetArgs = ['-preset', 'p1', '-tune', 'll'];
+    } else if (encoder === 'h264_amf') {
+      encoderPresetArgs = ['-quality', 'speed'];
+    } else {
+      encoderPresetArgs = [];
+    }
+
+    const args: string[] = ['-hide_banner', '-loglevel', 'error', '-thread_queue_size', '512'];
+
+    if (ddagrab) {
+      // DirectX Desktop Duplication API — GPU-accelerated, per-monitor, Windows 8+
+      const filterStr = [
+        `ddagrab=output_idx=${displayIndex}:draw_mouse=1:framerate=${fps}`,
+        'hwdownload',
+        'format=nv12',
+        'crop=trunc(iw/16)*16:trunc(ih/16)*16:0:0',
+      ].join(',');
+      args.push('-filter_complex', filterStr);
+    } else {
+      // GDI grab fallback — captures the full desktop (multi-monitor unsupported)
+      args.push(
+        '-f', 'gdigrab',
+        '-draw_mouse', '1',
+        '-framerate', String(fps),
+        '-i', 'desktop',
+        '-vf', 'crop=trunc(iw/16)*16:trunc(ih/16)*16:0:0,format=nv12',
+      );
+    }
+
+    args.push(
+      '-c:v', encoder,
+      ...encoderPresetArgs,
+      '-b:v', bitrate,
+      '-maxrate', maxrate,
+      '-bufsize', bufsize,
+      '-g', String(gopSize),
+      '-keyint_min', String(gopSize),
+      '-profile:v', 'baseline',
+      '-an',
+    );
+
+    const recordTo = process.env.SCREENCAST_RECORD_TO;
+    if (recordTo) {
+      args.push('-f', 'matroska', recordTo);
+      console.log(`[capture] DEBUG recording to ${recordTo} — WebRTC stream inactive`);
+    } else {
+      args.push('-f', 'rtp', `rtp://127.0.0.1:${port}`);
+    }
+
+    this.emit('log', `Starting ffmpeg (Windows): display=${displayIndex} encoder=${encoder} ddagrab=${ddagrab} RTP port=${port}`);
+    console.log(`[capture] #spawnVideoWindows: ffmpeg ${args.join(' ')}`);
+
+    const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    this.#process = proc;
+
+    socket.on('message', (msg: Buffer) => { this.emit('videoRtp', msg); });
+
+    let gotData = false;
+    const noDataTimer = setTimeout(() => {
+      if (!gotData && !this.#stopped) {
+        this.emit('log', 'WARNING: No video data after 5 seconds. Check screen recording permissions.');
+      }
+    }, 5000);
+
+    socket.once('message', () => {
+      if (!gotData) {
+        gotData = true;
+        clearTimeout(noDataTimer);
+        this.emit('log', 'First video RTP packet received');
+      }
+    });
+
+    proc.stderr!.on('data', (data: Buffer) => {
+      const msg = data.toString().trim();
+      if (msg) this.emit('log', msg);
+    });
+
+    proc.on('close', (code: number | null) => {
+      clearTimeout(noDataTimer);
+      if (this.#stopped) return;
+      this.emit('log', `FFmpeg exited with code ${code}, restarting...`);
+      this.#closeVideoSocket();
+      this.emit('restart');
+      setTimeout(() => this.#spawnVideo(screenIndex), 1000);
+    });
+
+    proc.on('error', (err: Error) => { this.emit('error', err); });
+  }
+
   async #spawnAudio(audio: AudioConfig): Promise<void> {
     if (this.#stopped) return;
+    if (isWindows()) {
+      await this.#spawnAudioWindows(audio);
+      return;
+    }
 
     const binPath = resolveScAudioPath();
     console.log(`[capture] #spawnAudio: mode=${audio.mode} sc-audio=${binPath ?? 'NOT FOUND'}`);
@@ -422,6 +575,51 @@ export class Capture extends EventEmitter {
     });
   }
 
+  async #spawnAudioWindows(audio: AudioConfig): Promise<void> {
+    if (this.#stopped) return;
+
+    const { socket, port } = await bindUdpSocket();
+    this.#audioSocket = socket;
+
+    if (audio.mode === 'app') {
+      this.emit('log', 'Per-app audio capture is not supported on Windows; using system loopback.');
+    }
+    this.emit('log', `Starting WASAPI loopback audio (Opus RTP to port ${port})`);
+
+    // WASAPI loopback: captures all audio currently playing through the default output device
+    const proc = spawn('ffmpeg', [
+      '-hide_banner', '-loglevel', 'error',
+      '-f', 'wasapi',
+      '-loopback', '1',
+      '-i', '',
+      '-c:a', 'libopus',
+      '-b:a', this.#config.audioBitrate,
+      '-frame_duration', '20',
+      '-application', 'audio',
+      '-vbr', 'on',
+      '-f', 'rtp', `rtp://127.0.0.1:${port}`,
+    ], { stdio: ['ignore', 'ignore', 'pipe'] });
+    this.#audioProcess = proc;
+
+    socket.on('message', (msg: Buffer) => { this.emit('audioRtp', msg); });
+
+    proc.stderr!.on('data', (data: Buffer) => {
+      const msg = data.toString().trim();
+      if (msg) this.emit('log', `[wasapi] ${msg}`);
+    });
+
+    proc.on('error', (err: Error) => {
+      this.emit('log', `[wasapi] Error: ${err.message}`);
+    });
+
+    proc.on('close', (code: number | null) => {
+      if (this.#stopped) return;
+      this.emit('log', `[wasapi] Exited with code ${code}, restarting audio...`);
+      this.#killAudioPipeline();
+      setTimeout(() => this.#spawnAudio(audio), 1000);
+    });
+  }
+
   #closeVideoSocket(): void {
     if (this.#videoSocket) {
       this.#videoSocket.close();
@@ -463,7 +661,38 @@ export class Capture extends EventEmitter {
   }
 }
 
+async function listWindowsDevices(): Promise<DeviceList> {
+  const screens: Device[] = [];
+  const audioDevices: Device[] = [];
+
+  // Use PowerShell to enumerate monitors
+  await new Promise<void>((resolve) => {
+    const ps = spawn('powershell', [
+      '-NoProfile', '-NonInteractive', '-Command',
+      'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::AllScreens | ForEach-Object { $_.DeviceName }',
+    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    ps.stdout!.on('data', (d: Buffer) => { out += d; });
+    ps.on('close', () => {
+      const lines = out.trim().split(/\r?\n/).filter(Boolean);
+      for (let i = 0; i < lines.length; i++) {
+        screens.push({ index: String(i), name: lines[i].trim() || `Display ${i}` });
+      }
+      if (screens.length === 0) screens.push({ index: '0', name: 'Display 0' });
+      resolve();
+    });
+    ps.on('error', () => { screens.push({ index: '0', name: 'Display 0' }); resolve(); });
+  });
+
+  // Provide the default WASAPI loopback device as the audio option
+  audioDevices.push({ index: '', name: 'System Audio (WASAPI Loopback)' });
+
+  return { screens, audioDevices };
+}
+
 export async function listDevices(): Promise<DeviceList> {
+  if (isWindows()) return listWindowsDevices();
+
   return new Promise((resolve, reject) => {
     const sck = useSck();
     const args = sck

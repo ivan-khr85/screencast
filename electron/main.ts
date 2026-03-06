@@ -48,8 +48,9 @@ interface ReadinessResult {
 }
 
 function commandExists(cmd: string): Promise<boolean> {
+  const checker = process.platform === 'win32' ? 'where' : 'which';
   return new Promise((resolve) => {
-    execFile('which', [cmd], (err) => resolve(!err));
+    execFile(checker, [cmd], (err) => resolve(!err));
   });
 }
 
