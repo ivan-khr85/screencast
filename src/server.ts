@@ -23,6 +23,7 @@ export class StreamServer {
   #chatEnabled = true;
   #mime: string | null = null;
   #takenNames = new Set<string>();
+  #hasAudio = false;
 
   constructor(password: string, config: Partial<Config> = {}) {
     this.#config = { ...DEFAULTS, ...config };
@@ -46,6 +47,10 @@ export class StreamServer {
     });
   }
 
+  setHasAudio(hasAudio: boolean): void {
+    this.#hasAudio = hasAudio;
+  }
+
   #setupMp4Frag(): void {
     this.#mp4frag.on("error", (err: Error) => {
       console.error(`  [server] mp4frag error: ${err.message}`);
@@ -57,10 +62,11 @@ export class StreamServer {
       // Send init segment to viewers that connected before ffmpeg was ready
       const init = this.#mp4frag.initialization;
       if (init && this.#waitingForInit.size > 0) {
+        const tagged = this.#tagVideo(init);
         for (const ws of this.#waitingForInit) {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: "mime", mime: this.#mime }));
-            ws.send(init, { binary: true });
+            ws.send(tagged, { binary: true });
           }
         }
         this.#waitingForInit.clear();
@@ -68,8 +74,15 @@ export class StreamServer {
     });
 
     this.#mp4frag.on("segment", ({ segment }) => {
-      this.#broadcast(segment);
+      this.#broadcast(this.#tagVideo(segment));
     });
+  }
+
+  #tagVideo(buf: Buffer): Buffer {
+    const tagged = Buffer.allocUnsafe(1 + buf.length);
+    tagged[0] = 0x00;
+    buf.copy(tagged, 1);
+    return tagged;
   }
 
   get viewerCount(): number {
@@ -103,6 +116,13 @@ export class StreamServer {
 
   pushData(chunk: Buffer): void {
     this.#mp4frag.write(chunk);
+  }
+
+  pushAudio(chunk: Buffer): void {
+    const tagged = Buffer.allocUnsafe(1 + chunk.length);
+    tagged[0] = 0x01;
+    chunk.copy(tagged, 1);
+    this.#broadcast(tagged);
   }
 
   resetParser(): void {
@@ -145,6 +165,9 @@ export class StreamServer {
         type: "stream_info",
         fps: this.#config.fps,
         bitrate: this.#config.bitrate,
+        hasAudio: this.#hasAudio,
+        audioSampleRate: this.#config.audioSampleRate,
+        audioChannels: this.#config.audioChannels,
         liveEdgeThreshold: this.#config.liveEdgeThreshold,
         bufferEvictionSeconds: this.#config.bufferEvictionSeconds,
       }),
@@ -156,7 +179,7 @@ export class StreamServer {
       if (this.#mime) {
         ws.send(JSON.stringify({ type: "mime", mime: this.#mime }));
       }
-      ws.send(init, { binary: true });
+      ws.send(this.#tagVideo(init), { binary: true });
     } else {
       this.#waitingForInit.add(ws);
     }
@@ -227,7 +250,7 @@ export class StreamServer {
     }
   }
 
-  #broadcast(segment: Buffer): void {
+  #broadcast(data: Buffer): void {
     for (const ws of this.#viewers) {
       if (ws.readyState !== WebSocket.OPEN) {
         this.#viewers.delete(ws);
@@ -250,7 +273,7 @@ export class StreamServer {
         continue;
       }
 
-      ws.send(segment, { binary: true });
+      ws.send(data, { binary: true });
     }
   }
 

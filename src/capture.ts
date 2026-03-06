@@ -1,8 +1,5 @@
-import { spawn, execFileSync, ChildProcess } from 'node:child_process';
+import { spawn, ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import { DEFAULTS, Config, AudioConfig } from './constants.js';
 import { resolveScAudioPath } from './audio-setup.js';
 
@@ -21,9 +18,6 @@ export class Capture extends EventEmitter {
   #audioProcess: ChildProcess | null = null;
   #stopped = false;
   #config: Config;
-  #fifoPath: string | null = null;
-  #screenIndex: string = '1';
-  #audioConfig: AudioConfig = { mode: 'none' };
 
   constructor(config: Partial<Config> = {}) {
     super();
@@ -32,34 +26,16 @@ export class Capture extends EventEmitter {
 
   start(screenIndex: string, audio: AudioConfig): void {
     this.#stopped = false;
-    this.#screenIndex = screenIndex;
-    this.#audioConfig = audio;
-
+    this.#spawnVideo(screenIndex);
     if (audio.mode !== 'none') {
-      this.#fifoPath = this.#createFifo();
       this.#spawnAudio(audio);
     }
-    this.#spawnVideo(screenIndex, audio);
   }
 
-  #createFifo(): string {
-    const fifoPath = path.join(os.tmpdir(), `screencast-audio-${process.pid}.fifo`);
-    try { fs.unlinkSync(fifoPath); } catch {}
-    execFileSync('mkfifo', [fifoPath]);
-    return fifoPath;
-  }
-
-  #cleanupFifo(): void {
-    if (this.#fifoPath) {
-      try { fs.unlinkSync(this.#fifoPath); } catch {}
-      this.#fifoPath = null;
-    }
-  }
-
-  #spawnVideo(screenIndex: string, audio: AudioConfig): void {
+  #spawnVideo(screenIndex: string): void {
     if (this.#stopped) return;
 
-    const { fps, bitrate, maxrate, bufsize, gopSize, resolution, audioBitrate } = this.#config;
+    const { fps, bitrate, maxrate, bufsize, gopSize, resolution } = this.#config;
 
     const args: string[] = [
       '-hide_banner', '-loglevel', 'error',
@@ -69,20 +45,6 @@ export class Capture extends EventEmitter {
       '-pixel_format', 'nv12',
       '-framerate', String(fps),
       '-i', `${screenIndex}:none`,
-    ];
-
-    // Audio input from FIFO (raw PCM from sc-audio)
-    if (this.#fifoPath && audio.mode !== 'none') {
-      args.push(
-        '-thread_queue_size', '1024',
-        '-f', 'f32le',
-        '-ar', '48000',
-        '-ac', '2',
-        '-i', this.#fifoPath,
-      );
-    }
-
-    args.push(
       '-c:v', 'h264_videotoolbox',
       '-allow_sw', '1',
       '-realtime', 'true',
@@ -93,32 +55,22 @@ export class Capture extends EventEmitter {
       '-g', String(gopSize),
       '-keyint_min', String(gopSize),
       '-profile:v', 'main',
-    );
+      '-an',
+    ];
 
     if (resolution && resolution !== 'original') {
       args.push('-vf', `scale=-2:${resolution}`);
     }
 
-    if (this.#fifoPath && audio.mode !== 'none') {
-      // Map video from input 0, audio from input 1
-      args.push(
-        '-map', '0:v', '-map', '1:a',
-        '-c:a', 'aac_at',
-        '-b:a', audioBitrate,
-      );
-    } else {
-      args.push('-an');
-    }
-
     args.push(
       '-max_delay', '0',
       '-f', 'mp4',
-      '-movflags', '+frag_every_frame+empty_moov+default_base_moof',
+      '-movflags', '+empty_moov+default_base_moof+frag_every_frame',
       '-flush_packets', '1',
       'pipe:1',
     );
 
-    this.emit('log', `Starting ffmpeg: screen=${screenIndex}${audio.mode !== 'none' ? ' + audio (AAC muxed)' : ' (video only)'}`);
+    this.emit('log', `Starting ffmpeg: screen=${screenIndex} (video only)`);
 
     const proc = spawn('ffmpeg', args, {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -152,7 +104,8 @@ export class Capture extends EventEmitter {
       clearTimeout(noDataTimer);
       if (this.#stopped) return;
       this.emit('log', `FFmpeg exited with code ${code}, restarting...`);
-      this.#restartAll();
+      this.emit('restart');
+      setTimeout(() => this.#spawnVideo(screenIndex), 1000);
     });
 
     proc.on('error', (err: Error) => {
@@ -173,17 +126,18 @@ export class Capture extends EventEmitter {
     if (audio.mode === 'app' && audio.appBundleId) {
       helperArgs.push('--app', audio.appBundleId);
     }
-    if (this.#fifoPath) {
-      helperArgs.push('--output', this.#fifoPath);
-    }
 
     this.emit('log', `Starting sc-audio: ${helperArgs.join(' ')}`);
 
     const proc = spawn(binPath, helperArgs, {
-      stdio: ['ignore', 'ignore', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
 
     this.#audioProcess = proc;
+
+    proc.stdout!.on('data', (chunk: Buffer) => {
+      this.emit('audio', chunk);
+    });
 
     proc.stderr!.on('data', (data: Buffer) => {
       const msg = data.toString().trim();
@@ -196,36 +150,9 @@ export class Capture extends EventEmitter {
 
     proc.on('close', (code: number | null) => {
       if (this.#stopped) return;
-      this.emit('log', `[sc-audio] Exited with code ${code}, triggering restart...`);
-      // Kill FFmpeg too — it will trigger a full restart via its own close handler
-      if (this.#process) {
-        this.#process.kill('SIGTERM');
-      }
+      this.emit('log', `[sc-audio] Exited with code ${code}, restarting...`);
+      setTimeout(() => this.#spawnAudio(audio), 1000);
     });
-  }
-
-  #restartAll(): void {
-    if (this.#stopped) return;
-
-    // Kill audio process if still running
-    if (this.#audioProcess) {
-      this.#audioProcess.kill('SIGTERM');
-      this.#audioProcess = null;
-    }
-    this.#process = null;
-
-    this.emit('restart');
-
-    // Recreate FIFO and restart both processes
-    setTimeout(() => {
-      if (this.#stopped) return;
-      this.#cleanupFifo();
-      if (this.#audioConfig.mode !== 'none') {
-        this.#fifoPath = this.#createFifo();
-        this.#spawnAudio(this.#audioConfig);
-      }
-      this.#spawnVideo(this.#screenIndex, this.#audioConfig);
-    }, 1000);
   }
 
   stop(): void {
@@ -238,7 +165,6 @@ export class Capture extends EventEmitter {
       this.#process.kill('SIGTERM');
       this.#process = null;
     }
-    this.#cleanupFifo();
   }
 }
 

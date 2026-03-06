@@ -26,6 +26,155 @@
 
   let isMuted = true; // Start muted (browser autoplay policy)
 
+  // --- Audio state (Web Audio API / AudioWorklet) ---
+  let audioCtx = null;
+  let audioWorkletNode = null;
+  let audioGain = null;
+  let hasAudio = false;
+  let audioSampleRate = 48000;
+  let audioChannels = 2;
+
+  // AudioWorklet processor code — runs in a separate thread
+  const WORKLET_CODE = `
+class PCMPlayerProcessor extends AudioWorkletProcessor {
+  constructor(options) {
+    super();
+    const sr = options.processorOptions?.sampleRate || 48000;
+    const ch = options.processorOptions?.channels || 2;
+
+    // 1 second ring buffer (room for network jitter)
+    this._bufSize = sr * ch * 1;
+    this._buf = new Float32Array(this._bufSize);
+    this._writePos = 0;
+    this._readPos = 0;
+    this._channels = ch;
+
+    // Max buffer before skip: 300ms
+    this._maxSamples = sr * ch * 0.3;
+    // Keep after skip: 100ms
+    this._keepSamples = ch * Math.ceil(sr * 0.1);
+    // Initial buffering: wait for 80ms before starting
+    this._initialThreshold = sr * ch * 0.08;
+    this._started = false;
+
+    this.port.onmessage = (e) => {
+      if (e.data instanceof Float32Array) {
+        this._write(e.data);
+      }
+    };
+  }
+
+  _write(data) {
+    for (let i = 0; i < data.length; i++) {
+      this._buf[this._writePos] = data[i];
+      this._writePos = (this._writePos + 1) % this._bufSize;
+      // If write catches up to read, advance read (drop oldest)
+      if (this._writePos === this._readPos) {
+        this._readPos = (this._readPos + 1) % this._bufSize;
+      }
+    }
+  }
+
+  _available() {
+    let avail = this._writePos - this._readPos;
+    if (avail < 0) avail += this._bufSize;
+    return avail;
+  }
+
+  process(inputs, outputs) {
+    const output = outputs[0];
+    if (!output || output.length === 0) return true;
+    const frameCount = output[0].length;
+    const ch = output.length;
+    const avail = this._available();
+
+    // Initial buffering — wait until we have enough data
+    if (!this._started) {
+      if (avail < this._initialThreshold) {
+        // Output silence
+        for (let c = 0; c < ch; c++) output[c].fill(0);
+        return true;
+      }
+      this._started = true;
+    }
+
+    // Skip ahead if too far behind (> 300ms buffered)
+    if (avail > this._maxSamples) {
+      const skip = avail - this._keepSamples;
+      this._readPos = (this._readPos + skip) % this._bufSize;
+    }
+
+    const currentAvail = this._available();
+    const samplesToRead = Math.min(frameCount * this._channels, currentAvail);
+    const framesToFill = Math.floor(samplesToRead / this._channels);
+
+    for (let i = 0; i < framesToFill; i++) {
+      for (let c = 0; c < ch; c++) {
+        const idx = c < this._channels ? c : 0;
+        const readIdx = (this._readPos + i * this._channels + idx) % this._bufSize;
+        output[c][i] = this._buf[readIdx];
+      }
+    }
+    this._readPos = (this._readPos + framesToFill * this._channels) % this._bufSize;
+
+    // Fill remaining with silence if underrun
+    for (let i = framesToFill; i < frameCount; i++) {
+      for (let c = 0; c < ch; c++) output[c][i] = 0;
+    }
+
+    return true;
+  }
+}
+registerProcessor('pcm-player-processor', PCMPlayerProcessor);
+`;
+
+  async function initAudio() {
+    if (audioCtx) return;
+    try {
+      audioCtx = new AudioContext({ sampleRate: audioSampleRate });
+      const blob = new Blob([WORKLET_CODE], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      await audioCtx.audioWorklet.addModule(url);
+      URL.revokeObjectURL(url);
+
+      audioWorkletNode = new AudioWorkletNode(audioCtx, 'pcm-player-processor', {
+        numberOfInputs: 0,
+        numberOfOutputs: 1,
+        outputChannelCount: [audioChannels],
+        processorOptions: { sampleRate: audioSampleRate, channels: audioChannels },
+      });
+
+      audioGain = audioCtx.createGain();
+      audioGain.gain.value = isMuted ? 0 : 1;
+      audioWorkletNode.connect(audioGain);
+      audioGain.connect(audioCtx.destination);
+    } catch (err) {
+      console.error('Failed to init AudioWorklet:', err);
+    }
+  }
+
+  function feedAudio(pcmData) {
+    if (!audioWorkletNode) return;
+    // pcmData is a Uint8Array of raw f32le PCM
+    const f32 = new Float32Array(pcmData.buffer, pcmData.byteOffset, pcmData.byteLength / 4);
+    audioWorkletNode.port.postMessage(f32, [f32.buffer]);
+  }
+
+  function destroyAudio() {
+    if (audioWorkletNode) {
+      audioWorkletNode.disconnect();
+      audioWorkletNode = null;
+    }
+    if (audioGain) {
+      audioGain.disconnect();
+      audioGain = null;
+    }
+    if (audioCtx) {
+      audioCtx.close().catch(() => {});
+      audioCtx = null;
+    }
+  }
+
   // Chat
   const chatToggle = document.getElementById('chat-toggle');
   const chatPanel = document.getElementById('chat-panel');
@@ -233,7 +382,8 @@
     return `${proto}//${location.host}`;
   }
 
-  // Mute toggle — controls video.muted
+  // Mute toggle — controls audioGain (Web Audio API) when audio is available,
+  // falls back to video.muted otherwise
   const muteToggle = document.getElementById('mute-toggle');
   const iconMuted = document.getElementById('icon-muted');
   const iconUnmuted = document.getElementById('icon-unmuted');
@@ -262,12 +412,14 @@
       ws.close();
     }
 
+    destroyAudio();
     muteToggle.style.display = 'none';
 
     setStatus('Connecting...', 'reconnecting');
     ws = new WebSocket(getWsUrl());
     ws.binaryType = 'arraybuffer';
     authenticated = false;
+    hasAudio = false;
     myName = null;
     chatNameRow.style.display = 'flex';
     chatInputRow.style.display = 'none';
@@ -352,8 +504,8 @@
     queue = [];
     initSegment = null;
 
-    // Start muted for autoplay policy — user clicks to unmute
-    video.muted = isMuted;
+    // Always mute the video element — audio is handled by Web Audio API
+    video.muted = true;
 
     dbg('MediaSource created, readyState=' + mediaSource.readyState);
     video.src = URL.createObjectURL(mediaSource);
@@ -376,16 +528,19 @@
         if (msg.type === 'mime') {
           serverMime = msg.mime;
           dbg('received mime:', msg.mime);
-          // Show mute button if stream contains audio
-          if (serverMime && serverMime.includes('mp4a')) {
-            muteToggle.style.display = 'flex';
-            updateMuteIcon();
-          }
         } else if (msg.type === 'stream_info') {
           streamInfo.fps = msg.fps || null;
           streamInfo.bitrate = msg.bitrate || null;
           if (msg.liveEdgeThreshold) LIVE_EDGE_THRESHOLD = msg.liveEdgeThreshold;
           if (msg.bufferEvictionSeconds) BUFFER_EVICTION_SEC = msg.bufferEvictionSeconds;
+          if (msg.hasAudio) {
+            hasAudio = true;
+            audioSampleRate = msg.audioSampleRate || 48000;
+            audioChannels = msg.audioChannels || 2;
+            muteToggle.style.display = 'flex';
+            updateMuteIcon();
+            initAudio();
+          }
           dbg('received stream_info:', JSON.stringify(msg));
         } else if (msg.type === 'viewer_count') {
           streamInfo.viewers = msg.count;
@@ -400,19 +555,28 @@
       return;
     }
 
-    if (!(data instanceof ArrayBuffer) || data.byteLength < 1) return;
+    if (!(data instanceof ArrayBuffer) || data.byteLength < 2) return;
 
-    const buf = new Uint8Array(data);
+    const view = new Uint8Array(data);
+    const tag = view[0];
+    const payload = view.subarray(1);
 
-    // First binary video message is the init segment (ftyp + moov)
-    if (!initSegment) {
-      initSegment = buf;
-      dbg('received init segment:', buf.length, 'bytes, MediaSource.readyState=' + mediaSource.readyState);
-      createSourceBuffer(buf);
+    if (tag === 0x01) {
+      // Audio PCM data
+      feedAudio(payload);
       return;
     }
 
-    appendBuffer(buf);
+    // tag === 0x00: Video data
+    // First binary video message is the init segment (ftyp + moov)
+    if (!initSegment) {
+      initSegment = payload;
+      dbg('received init segment:', payload.length, 'bytes, MediaSource.readyState=' + mediaSource.readyState);
+      createSourceBuffer(payload);
+      return;
+    }
+
+    appendBuffer(payload);
   }
 
   function createSourceBuffer(init) {
@@ -426,7 +590,6 @@
     dbg('createSourceBuffer: serverMime=' + serverMime, 'isSupported=' + (mime ? MediaSource.isTypeSupported(mime) : 'N/A'));
     if (!mime || !MediaSource.isTypeSupported(mime)) {
       const fallbacks = [
-        'video/mp4; codecs="avc1.640028,mp4a.40.2"',
         'video/mp4; codecs="avc1.640028"',
         'video/mp4',
       ];
@@ -536,13 +699,24 @@
 
   window.toggleMute = function() {
     isMuted = !isMuted;
-    video.muted = isMuted;
+    if (audioGain) {
+      audioGain.gain.value = isMuted ? 0 : 1;
+    }
+    // Resume AudioContext if suspended (browser autoplay policy)
+    if (!isMuted && audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
     updateMuteIcon();
   };
 
   video.addEventListener('click', () => {
     isMuted = !isMuted;
-    video.muted = isMuted;
+    if (audioGain) {
+      audioGain.gain.value = isMuted ? 0 : 1;
+    }
+    if (!isMuted && audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
     updateMuteIcon();
   });
 
