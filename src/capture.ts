@@ -1,7 +1,31 @@
 import { spawn, ChildProcess } from 'node:child_process';
+import dgram from 'node:dgram';
 import { EventEmitter } from 'node:events';
+import os from 'node:os';
 import { DEFAULTS, Config, AudioConfig } from './constants.js';
 import { resolveScAudioPath } from './audio-setup.js';
+
+// AVCaptureScreenInput was deprecated in macOS 14 (Darwin 23) and removed in
+// macOS 15+. Use FFmpeg's screencapturekit input device on those systems.
+export function useSck(): boolean {
+  return process.platform === 'darwin' && parseInt(os.release().split('.')[0], 10) >= 23;
+}
+
+// Returns false if the installed FFmpeg lacks screencapturekit support.
+// FFmpeg 7.0+ (built with ScreenCaptureKit) is required on macOS 15+.
+export function checkSckVideoSupport(): Promise<boolean> {
+  if (!useSck()) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const proc = spawn('ffmpeg', ['-hide_banner', '-f', 'screencapturekit', '-h'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let output = '';
+    proc.stdout!.on('data', (d: Buffer) => { output += d.toString(); });
+    proc.stderr!.on('data', (d: Buffer) => { output += d.toString(); });
+    proc.on('close', () => resolve(!/unknown input format/i.test(output)));
+    proc.on('error', () => resolve(false));
+  });
+}
 
 export interface Device {
   index: string;
@@ -13,9 +37,24 @@ export interface DeviceList {
   audioDevices: Device[];
 }
 
+function bindUdpSocket(): Promise<{ socket: dgram.Socket; port: number }> {
+  return new Promise((resolve, reject) => {
+    const socket = dgram.createSocket('udp4');
+    socket.on('error', reject);
+    socket.bind(0, '127.0.0.1', () => {
+      const addr = socket.address();
+      resolve({ socket, port: addr.port });
+    });
+  });
+}
+
 export class Capture extends EventEmitter {
   #process: ChildProcess | null = null;
+  #videoEncoder: ChildProcess | null = null;
   #audioProcess: ChildProcess | null = null;
+  #audioEncoder: ChildProcess | null = null;
+  #videoSocket: dgram.Socket | null = null;
+  #audioSocket: dgram.Socket | null = null;
   #stopped = false;
   #config: Config;
 
@@ -24,27 +63,31 @@ export class Capture extends EventEmitter {
     this.#config = { ...DEFAULTS, ...config };
   }
 
-  start(screenIndex: string, audio: AudioConfig): void {
+  async start(screenIndex: string, audio: AudioConfig): Promise<void> {
     this.#stopped = false;
-    this.#spawnVideo(screenIndex);
+    await this.#spawnVideo(screenIndex);
     if (audio.mode !== 'none') {
-      this.#spawnAudio(audio);
+      await this.#spawnAudio(audio);
     }
   }
 
-  #spawnVideo(screenIndex: string): void {
+  async #spawnVideo(screenIndex: string): Promise<void> {
     if (this.#stopped) return;
+
+    const { socket, port } = await bindUdpSocket();
+    this.#videoSocket = socket;
 
     const { fps, bitrate, maxrate, bufsize, gopSize, resolution } = this.#config;
 
+    const sck = useSck();
     const args: string[] = [
       '-hide_banner', '-loglevel', 'error',
       '-thread_queue_size', '512',
-      '-f', 'avfoundation',
+      '-f', sck ? 'screencapturekit' : 'avfoundation',
       '-capture_cursor', '1',
       '-pixel_format', 'nv12',
       '-framerate', String(fps),
-      '-i', `${screenIndex}:none`,
+      '-i', sck ? screenIndex : `${screenIndex}:none`,
       '-c:v', 'h264_videotoolbox',
       '-allow_sw', '1',
       '-realtime', 'true',
@@ -54,7 +97,7 @@ export class Capture extends EventEmitter {
       '-bufsize', bufsize,
       '-g', String(gopSize),
       '-keyint_min', String(gopSize),
-      '-profile:v', 'main',
+      '-profile:v', 'baseline',
       '-an',
     ];
 
@@ -62,21 +105,20 @@ export class Capture extends EventEmitter {
       args.push('-vf', `scale=-2:${resolution}`);
     }
 
-    args.push(
-      '-max_delay', '0',
-      '-f', 'mp4',
-      '-movflags', '+empty_moov+default_base_moof+frag_every_frame',
-      '-flush_packets', '1',
-      'pipe:1',
-    );
+    args.push('-f', 'rtp', `rtp://127.0.0.1:${port}`);
 
-    this.emit('log', `Starting ffmpeg: screen=${screenIndex} (video only)`);
+    this.emit('log', `Starting ffmpeg: screen=${screenIndex} (RTP to port ${port})`);
 
     const proc = spawn('ffmpeg', args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', 'ignore', 'pipe'],
     });
 
     this.#process = proc;
+
+    // Forward RTP packets from the UDP socket
+    socket.on('message', (msg: Buffer) => {
+      this.emit('videoRtp', msg);
+    });
 
     let gotData = false;
     const noDataTimer = setTimeout(() => {
@@ -86,24 +128,37 @@ export class Capture extends EventEmitter {
       }
     }, 5000);
 
-    proc.stdout!.on('data', (chunk: Buffer) => {
+    // Detect first RTP packet as "got data"
+    const onFirstPacket = () => {
       if (!gotData) {
         gotData = true;
         clearTimeout(noDataTimer);
-        this.emit('log', `First ffmpeg output: ${chunk.length} bytes`);
+        this.emit('log', 'First video RTP packet received');
       }
-      this.emit('data', chunk);
-    });
+    };
+    socket.once('message', onFirstPacket);
 
+    let fatalError = false;
     proc.stderr!.on('data', (data: Buffer) => {
       const msg = data.toString().trim();
-      if (msg) this.emit('log', msg);
+      if (msg) {
+        this.emit('log', msg);
+        if (/unknown input format|no such input format|unrecognized input format/i.test(msg)) fatalError = true;
+      }
     });
 
     proc.on('close', (code: number | null) => {
       clearTimeout(noDataTimer);
       if (this.#stopped) return;
+      if (fatalError) {
+        // FFmpeg screencapturekit unavailable at runtime — switch to native Swift capture
+        this.emit('log', 'FFmpeg screencapturekit unavailable, switching to native capture...');
+        this.#closeVideoSocket();
+        this.#spawnVideoFallback(screenIndex).catch((err: Error) => this.emit('error', err));
+        return;
+      }
       this.emit('log', `FFmpeg exited with code ${code}, restarting...`);
+      this.#closeVideoSocket();
       this.emit('restart');
       setTimeout(() => this.#spawnVideo(screenIndex), 1000);
     });
@@ -113,7 +168,128 @@ export class Capture extends EventEmitter {
     });
   }
 
-  #spawnAudio(audio: AudioConfig): void {
+  async #spawnVideoFallback(screenIndex: string): Promise<void> {
+    if (this.#stopped) return;
+
+    const { socket, port } = await bindUdpSocket();
+    this.#videoSocket = socket;
+
+    const { fps, bitrate, bufsize, gopSize, resolution } = this.#config;
+
+    const binPath = resolveScAudioPath();
+    if (!binPath) {
+      this.emit('error', new Error('sc-audio not found; cannot capture screen'));
+      return;
+    }
+
+    const displayIndex = parseInt(screenIndex, 10) || 0;
+    this.emit('log', `Starting sc-video fallback: display=${displayIndex} fps=${fps}`);
+
+    const scVideo = spawn(binPath, ['capture-screen', '--display', String(displayIndex), '--fps', String(fps)], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    this.#process = scVideo;
+
+    // Wait for JSON header line on stderr: {"width":W,"height":H}\n
+    const dims = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+      let buf = '';
+      const onData = (chunk: Buffer) => {
+        buf += chunk.toString();
+        const nl = buf.indexOf('\n');
+        if (nl === -1) return;
+        const line = buf.slice(0, nl);
+        scVideo.stderr!.removeListener('data', onData);
+        try {
+          const parsed = JSON.parse(line);
+          resolve({ width: parsed.width, height: parsed.height });
+        } catch {
+          reject(new Error(`sc-video: bad header: ${line}`));
+        }
+      };
+      scVideo.stderr!.on('data', onData);
+      scVideo.once('close', (code) => reject(new Error(`sc-video exited early (code ${code})`)));
+      scVideo.once('error', reject);
+    });
+
+    if (this.#stopped) { scVideo.kill(); return; }
+
+    // Forward remaining stderr as log
+    scVideo.stderr!.on('data', (d: Buffer) => {
+      const msg = d.toString().trim();
+      if (msg) this.emit('log', `[sc-video] ${msg}`);
+    });
+
+    const videoSize = `${dims.width}x${dims.height}`;
+    this.emit('log', `sc-video: ${videoSize}, starting encoder`);
+
+    const ffmpegArgs: string[] = [
+      '-hide_banner', '-loglevel', 'error',
+      '-thread_queue_size', '512',
+      '-f', 'rawvideo',
+      '-pixel_format', 'nv12',
+      '-video_size', videoSize,
+      '-framerate', String(fps),
+      '-i', 'pipe:0',
+      '-c:v', 'h264_videotoolbox',
+      '-allow_sw', '1',
+      '-realtime', 'true',
+      '-prio_speed', 'true',
+      '-b:v', bitrate,
+      '-maxrate', bitrate,
+      '-bufsize', bufsize,
+      '-g', String(gopSize),
+      '-keyint_min', String(gopSize),
+      '-profile:v', 'baseline',
+      '-an',
+    ];
+
+    if (resolution && resolution !== 'original') {
+      ffmpegArgs.push('-vf', `scale=-2:${resolution}`);
+    }
+    ffmpegArgs.push('-f', 'rtp', `rtp://127.0.0.1:${port}`);
+
+    const encoder = spawn('ffmpeg', ffmpegArgs, { stdio: ['pipe', 'ignore', 'pipe'] });
+    this.#videoEncoder = encoder;
+
+    scVideo.stdout!.pipe(encoder.stdin!);
+    encoder.stdin!.on('error', () => {});
+
+    socket.on('message', (msg: Buffer) => { this.emit('videoRtp', msg); });
+
+    let gotData = false;
+    const noDataTimer = setTimeout(() => {
+      if (!gotData && !this.#stopped) {
+        this.emit('log', 'WARNING: No video data after 5 seconds. Screen recording permission may be missing.');
+      }
+    }, 5000);
+    socket.once('message', () => {
+      if (!gotData) { gotData = true; clearTimeout(noDataTimer); this.emit('log', 'First video RTP packet received'); }
+    });
+
+    encoder.stderr!.on('data', (d: Buffer) => {
+      const msg = d.toString().trim();
+      if (msg) this.emit('log', `[ffmpeg-enc] ${msg}`);
+    });
+    encoder.on('error', (err: Error) => { this.emit('error', err); });
+
+    const restart = (source: string, code: number | null) => {
+      clearTimeout(noDataTimer);
+      if (this.#stopped) return;
+      this.emit('log', `[${source}] Exited with code ${code}, restarting...`);
+      if (this.#process) { this.#process.kill(); this.#process = null; }
+      this.#killVideoEncoder();
+      this.#closeVideoSocket();
+      this.emit('restart');
+      setTimeout(() => this.#spawnVideoFallback(screenIndex), 1000);
+    };
+
+    scVideo.on('close', (code) => restart('sc-video', code));
+    encoder.on('close', (code) => {
+      if (scVideo.exitCode === null && !scVideo.killed) restart('ffmpeg-enc', code);
+    });
+  }
+
+  async #spawnAudio(audio: AudioConfig): Promise<void> {
     if (this.#stopped) return;
 
     const binPath = resolveScAudioPath();
@@ -122,45 +298,117 @@ export class Capture extends EventEmitter {
       return;
     }
 
+    const { socket, port } = await bindUdpSocket();
+    this.#audioSocket = socket;
+
     const helperArgs = ['capture'];
     if (audio.mode === 'app' && audio.appBundleId) {
       helperArgs.push('--app', audio.appBundleId);
     }
 
-    this.emit('log', `Starting sc-audio: ${helperArgs.join(' ')}`);
+    this.emit('log', `Starting sc-audio: ${helperArgs.join(' ')} (Opus RTP to port ${port})`);
 
-    const proc = spawn(binPath, helperArgs, {
+    // Spawn sc-audio — outputs raw PCM (f32le, 48kHz, stereo) to stdout
+    const scAudio = spawn(binPath, helperArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    this.#audioProcess = scAudio;
 
-    this.#audioProcess = proc;
+    // Spawn FFmpeg to encode PCM → Opus → RTP
+    const encoder = spawn('ffmpeg', [
+      '-hide_banner', '-loglevel', 'error',
+      '-f', 'f32le', '-ar', '48000', '-ac', '2', '-i', 'pipe:0',
+      '-c:a', 'libopus',
+      '-b:a', this.#config.audioBitrate,
+      '-frame_duration', '20',
+      '-application', 'audio',
+      '-vbr', 'on',
+      '-f', 'rtp', `rtp://127.0.0.1:${port}`,
+    ], {
+      stdio: ['pipe', 'ignore', 'pipe'],
+    });
+    this.#audioEncoder = encoder;
 
-    proc.stdout!.on('data', (chunk: Buffer) => {
-      this.emit('audio', chunk);
+    // Pipe sc-audio stdout → FFmpeg stdin
+    scAudio.stdout!.pipe(encoder.stdin!);
+
+    // Forward RTP packets from the UDP socket
+    socket.on('message', (msg: Buffer) => {
+      this.emit('audioRtp', msg);
     });
 
-    proc.stderr!.on('data', (data: Buffer) => {
+    // Logging
+    scAudio.stderr!.on('data', (data: Buffer) => {
       const msg = data.toString().trim();
       if (msg) this.emit('log', `[sc-audio] ${msg}`);
     });
 
-    proc.on('error', (err: Error) => {
+    encoder.stderr!.on('data', (data: Buffer) => {
+      const msg = data.toString().trim();
+      if (msg) this.emit('log', `[opus] ${msg}`);
+    });
+
+    scAudio.on('error', (err: Error) => {
       this.emit('log', `[sc-audio] Error: ${err.message}`);
     });
 
-    proc.on('close', (code: number | null) => {
+    encoder.on('error', (err: Error) => {
+      this.emit('log', `[opus] Error: ${err.message}`);
+    });
+
+    // Handle pipe errors
+    encoder.stdin!.on('error', () => {});
+
+    // Restart logic: if either process dies, kill the other and restart both
+    const restartAudio = (source: string, code: number | null) => {
       if (this.#stopped) return;
-      this.emit('log', `[sc-audio] Exited with code ${code}, restarting...`);
+      this.emit('log', `[${source}] Exited with code ${code}, restarting audio pipeline...`);
+      this.#killAudioPipeline();
       setTimeout(() => this.#spawnAudio(audio), 1000);
+    };
+
+    scAudio.on('close', (code) => restartAudio('sc-audio', code));
+    encoder.on('close', (code) => {
+      if (scAudio.exitCode === null && !scAudio.killed) {
+        restartAudio('opus', code);
+      }
     });
   }
 
-  stop(): void {
-    this.#stopped = true;
+  #closeVideoSocket(): void {
+    if (this.#videoSocket) {
+      this.#videoSocket.close();
+      this.#videoSocket = null;
+    }
+  }
+
+  #killVideoEncoder(): void {
+    if (this.#videoEncoder) {
+      this.#videoEncoder.kill('SIGTERM');
+      this.#videoEncoder = null;
+    }
+  }
+
+  #killAudioPipeline(): void {
+    if (this.#audioEncoder) {
+      this.#audioEncoder.kill('SIGTERM');
+      this.#audioEncoder = null;
+    }
     if (this.#audioProcess) {
       this.#audioProcess.kill('SIGTERM');
       this.#audioProcess = null;
     }
+    if (this.#audioSocket) {
+      this.#audioSocket.close();
+      this.#audioSocket = null;
+    }
+  }
+
+  stop(): void {
+    this.#stopped = true;
+    this.#killAudioPipeline();
+    this.#killVideoEncoder();
+    this.#closeVideoSocket();
     if (this.#process) {
       this.#process.kill('SIGTERM');
       this.#process = null;
@@ -170,42 +418,44 @@ export class Capture extends EventEmitter {
 
 export async function listDevices(): Promise<DeviceList> {
   return new Promise((resolve, reject) => {
-    const proc = spawn('ffmpeg', [
-      '-hide_banner',
-      '-f', 'avfoundation',
-      '-list_devices', 'true',
-      '-i', '',
-    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const sck = useSck();
+    const args = sck
+      // screencapturekit uses -list_displays, not avfoundation's -list_devices
+      ? ['-hide_banner', '-f', 'screencapturekit', '-list_displays', '1', '-i', '']
+      : ['-hide_banner', '-f', 'avfoundation', '-list_devices', 'true', '-i', ''];
 
-    let stderr = '';
-    proc.stderr!.on('data', (d: Buffer) => { stderr += d.toString(); });
+    const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+
+    let output = '';
+    proc.stdout!.on('data', (d: Buffer) => { output += d.toString(); });
+    proc.stderr!.on('data', (d: Buffer) => { output += d.toString(); });
     proc.on('close', () => {
       const screens: Device[] = [];
       const audioDevices: Device[] = [];
+      const lines = output.split('\n');
 
-      const lines = stderr.split('\n');
-      let section: 'video' | 'audio' | null = null;
-
-      for (const line of lines) {
-        if (line.includes('AVFoundation video devices:')) {
-          section = 'video';
-          continue;
+      if (sck) {
+        // screencapturekit lists displays as: [N] Capture screen N
+        for (const line of lines) {
+          const match = line.match(/\[(\d+)]\s+(.+)/);
+          if (match) screens.push({ index: match[1], name: match[2].trim() });
         }
-        if (line.includes('AVFoundation audio devices:')) {
-          section = 'audio';
-          continue;
+        // Fallback: if listing failed or this FFmpeg build doesn't support
+        // -list_displays, assume main display exists at index 0.
+        if (screens.length === 0) {
+          screens.push({ index: '0', name: 'Capture screen 0' });
         }
-
-        const match = line.match(/\[(\d+)]\s+(.+)/);
-        if (!match) continue;
-
-        const index = match[1];
-        const name = match[2].trim();
-
-        if (section === 'video') {
-          screens.push({ index, name });
-        } else if (section === 'audio') {
-          audioDevices.push({ index, name });
+      } else {
+        let section: 'video' | 'audio' | null = null;
+        for (const line of lines) {
+          if (line.includes('AVFoundation video devices:')) { section = 'video'; continue; }
+          if (line.includes('AVFoundation audio devices:')) { section = 'audio'; continue; }
+          const match = line.match(/\[(\d+)]\s+(.+)/);
+          if (!match) continue;
+          const index = match[1];
+          const name = match[2].trim();
+          if (section === 'video') screens.push({ index, name });
+          else if (section === 'audio') audioDevices.push({ index, name });
         }
       }
 

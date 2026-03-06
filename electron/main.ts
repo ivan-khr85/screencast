@@ -43,6 +43,7 @@ interface ReadinessResult {
   hasFFmpeg: boolean;
   hasScAudio: boolean;
   hasCloudflared: boolean;
+  hasSckVideo: boolean;
   screenRecording: 'granted' | 'denied' | 'unknown';
 }
 
@@ -73,6 +74,7 @@ async function checkReadiness(): Promise<ReadinessResult> {
     hasFFmpeg,
     hasScAudio,
     hasCloudflared,
+    hasSckVideo: true,
     screenRecording,
   };
 }
@@ -150,6 +152,7 @@ interface StreamConfig {
   audioAppBundleId?: string;
   tunnel: boolean;
   chat: boolean;
+  screenIndex?: string;
 }
 
 interface StreamStatus {
@@ -263,12 +266,16 @@ async function startStream(config: StreamConfig): Promise<void> {
     }
   }
 
-  const { screens } = await listDevices();
-  const screenDevices = screens.filter((d) =>
-    /capture screen|screen/i.test(d.name),
-  );
-  const selectedScreen = screenDevices[0] || screens[0];
-  if (!selectedScreen) throw new Error('No screen capture devices found');
+  let screenIndex: string;
+  if (config.screenIndex) {
+    screenIndex = config.screenIndex;
+  } else {
+    const { screens } = await listDevices();
+    const screenDevices = screens.filter((d) => /capture screen|screen/i.test(d.name));
+    const selected = screenDevices[0] || screens[0];
+    if (!selected) throw new Error('No screen capture devices found');
+    screenIndex = selected.index;
+  }
 
   const audioConfig: AudioConfig = config.audioMode === 'none'
     ? { mode: 'none' }
@@ -286,8 +293,6 @@ async function startStream(config: StreamConfig): Promise<void> {
     fps: config.fps,
     bitrate: config.bitrate,
     maxViewers: config.maxViewers,
-    liveEdgeThreshold: preset.liveEdgeThreshold,
-    bufferEvictionSeconds: preset.bufferEvictionSeconds,
   });
   server.setHasAudio(audioConfig.mode !== 'none');
   server.setChatEnabled(config.chat !== false);
@@ -300,9 +305,9 @@ async function startStream(config: StreamConfig): Promise<void> {
     gopSize,
     resolution: config.quality,
   });
-  capture.on('data', (chunk) => server?.pushData(chunk));
-  capture.on('audio', (chunk) => server?.pushAudio(chunk));
-  capture.on('restart', () => server?.resetParser());
+  capture.on('videoRtp', (packet) => server?.pushVideoRtp(packet));
+  capture.on('audioRtp', (packet) => server?.pushAudioRtp(packet));
+  capture.on('restart', () => server?.resetConnections());
   capture.on('error', (err: Error) => {
     status.error = `FFmpeg: ${err.message}`;
     pushStatus();
@@ -314,7 +319,7 @@ async function startStream(config: StreamConfig): Promise<void> {
       pushStatus();
     }
   });
-  capture.start(selectedScreen.index, audioConfig);
+  await capture.start(screenIndex, audioConfig);
 
   let url = `http://localhost:${port}`;
   if (config.tunnel) {

@@ -13,7 +13,46 @@
     audioMode: document.getElementById('audioMode'),
     audioAppField: document.getElementById('audioAppField'),
     audioApp: document.getElementById('audioApp'),
+    screenSelect: document.getElementById('screenSelect'),
+    displayThumb: document.getElementById('displayThumb'),
   };
+
+  // Load system display list with thumbnails via desktopCapturer
+  let screenSources = [];
+  async function loadScreenSources() {
+    try {
+      screenSources = await window.api.getScreenSources();
+    } catch {
+      return;
+    }
+    if (!screenSources.length) return;
+
+    els.screenSelect.innerHTML = '';
+    for (const src of screenSources) {
+      const opt = document.createElement('option');
+      opt.value = src.index;
+      opt.textContent = src.name;
+      els.screenSelect.appendChild(opt);
+    }
+
+    updateDisplayThumb();
+  }
+
+  function updateDisplayThumb() {
+    const idx = parseInt(els.screenSelect.value, 10);
+    const src = screenSources[idx];
+    if (src && src.thumbnail) {
+      els.displayThumb.src = src.thumbnail;
+      els.displayThumb.classList.remove('hidden');
+      els.displayThumb.style.display = 'block';
+    } else {
+      els.displayThumb.classList.add('hidden');
+      els.displayThumb.style.display = 'none';
+    }
+  }
+
+  els.screenSelect.addEventListener('change', updateDisplayThumb);
+  loadScreenSources();
 
   const LATENCY_BITRATES = { 'ultra-low': '48750k', 'medium': '32500k', 'slow': '16250k' };
   document.getElementById('latency').addEventListener('change', function() {
@@ -114,6 +153,7 @@
         audioAppBundleId: audioMode === 'app' ? els.audioApp.value : undefined,
         tunnel: document.getElementById('tunnel').checked,
         chat: document.getElementById('chat').checked,
+        screenIndex: els.screenSelect.value,
       };
 
       const result = await window.api.startStream(config);

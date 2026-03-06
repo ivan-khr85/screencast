@@ -10,6 +10,14 @@ cp "$ROOT/src/viewer.html" \
    "$ROOT/src/viewer.js" \
    "$ROOT/dist/src/"
 
+# esbuild bundles electron/main.ts so __dirname resolves to dist/electron/
+# Copy viewer files there too so the HTTP server can find them
+mkdir -p "$ROOT/dist/electron"
+cp "$ROOT/src/viewer.html" \
+   "$ROOT/src/viewer.css" \
+   "$ROOT/src/viewer.js" \
+   "$ROOT/dist/electron/"
+
 # Electron UI
 mkdir -p "$ROOT/dist/electron/ui"
 cp "$ROOT/electron/ui/index.html" \
