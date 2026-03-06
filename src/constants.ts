@@ -1,3 +1,10 @@
+export type AudioMode = 'system' | 'app' | 'none';
+
+export interface AudioConfig {
+  mode: AudioMode;
+  appBundleId?: string;
+}
+
 export type LatencyMode = "ultra-low" | "medium" | "slow";
 
 export interface LatencyPreset {
@@ -10,19 +17,19 @@ export interface LatencyPreset {
 export const LATENCY_PRESETS: Record<LatencyMode, LatencyPreset> = {
   "ultra-low": {
     gopMultiplier: 1 / 6,
-    bufsize: "2000k",
+    bufsize: "2600k",
     liveEdgeThreshold: 0.3,
     bufferEvictionSeconds: 2,
   },
   medium: {
     gopMultiplier: 0.5,
-    bufsize: "5000k",
+    bufsize: "6500k",
     liveEdgeThreshold: 1,
     bufferEvictionSeconds: 5,
   },
   slow: {
     gopMultiplier: 2,
-    bufsize: "10000k",
+    bufsize: "13000k",
     liveEdgeThreshold: 3,
     bufferEvictionSeconds: 15,
   },
@@ -50,10 +57,10 @@ export interface Config {
 export const DEFAULTS: Config = {
   port: 8080,
   fps: 60,
-  bitrate: "15000k",
-  maxrate: "26000k",
-  bufsize: "2000k",
-  audioBitrate: "128k",
+  bitrate: "19500k",
+  maxrate: "33800k",
+  bufsize: "2600k",
+  audioBitrate: "166k",
   audioSampleRate: 48000,
   audioChannels: 2,
   gopSize: 10,

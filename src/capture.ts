@@ -1,6 +1,8 @@
-import { spawn, ChildProcess } from 'node:child_process';
+import { spawn, execSync, ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { DEFAULTS, Config } from './constants.js';
+import { existsSync, unlinkSync } from 'node:fs';
+import { DEFAULTS, Config, AudioConfig } from './constants.js';
+import { resolveScAudioPath } from './audio-setup.js';
 
 export interface Device {
   index: string;
@@ -14,6 +16,8 @@ export interface DeviceList {
 
 export class Capture extends EventEmitter {
   #process: ChildProcess | null = null;
+  #audioHelper: ChildProcess | null = null;
+  #fifoPath: string | null = null;
   #stopped = false;
   #config: Config;
 
@@ -22,26 +26,46 @@ export class Capture extends EventEmitter {
     this.#config = { ...DEFAULTS, ...config };
   }
 
-  start(screenIndex: string, audioDevice: string | null): void {
+  start(screenIndex: string, audio: AudioConfig): void {
     this.#stopped = false;
-    this.#spawn(screenIndex, audioDevice);
+    this.#spawn(screenIndex, audio);
   }
 
-  #spawn(screenIndex: string, audioDevice: string | null): void {
+  #spawn(screenIndex: string, audio: AudioConfig): void {
     if (this.#stopped) return;
 
     const { fps, bitrate, maxrate, bufsize, gopSize, resolution, audioBitrate, audioSampleRate, audioChannels } = this.#config;
-    const hasAudio = audioDevice != null;
-    const inputDevice = hasAudio ? `${screenIndex}:${audioDevice}` : `${screenIndex}:none`;
+    const hasAudio = audio.mode !== 'none';
 
+    // Set up audio helper + FIFO for ScreenCaptureKit modes
+    if (hasAudio) {
+      this.#setupAudioHelper(audio);
+    }
+
+    // --- Inputs ---
     const args: string[] = [
       '-hide_banner', '-loglevel', 'error',
-      // Input
+      // Input 0: Video
+      '-thread_queue_size', '512',
       '-f', 'avfoundation',
       '-capture_cursor', '1',
+      '-pixel_format', 'nv12',
       '-framerate', String(fps),
-      '-i', inputDevice,
-      // Video encoding
+      '-i', `${screenIndex}:none`,
+    ];
+
+    if (hasAudio && this.#fifoPath) {
+      // Input 1: Audio from FIFO (ScreenCaptureKit raw PCM)
+      args.push(
+        '-f', 'f32le',
+        '-ar', String(audioSampleRate),
+        '-ac', String(audioChannels),
+        '-i', this.#fifoPath,
+      );
+    }
+
+    // --- Encoding & Output (after all inputs) ---
+    args.push(
       '-c:v', 'h264_videotoolbox',
       '-allow_sw', '1',
       '-realtime', 'true',
@@ -52,33 +76,31 @@ export class Capture extends EventEmitter {
       '-g', String(gopSize),
       '-keyint_min', String(gopSize),
       '-profile:v', 'baseline',
-    ];
+    );
 
     if (resolution && resolution !== 'original') {
       args.push('-vf', `scale=-2:${resolution}`);
     }
 
-    if (hasAudio) {
+    if (hasAudio && this.#fifoPath) {
       args.push(
         '-c:a', 'aac',
         '-b:a', audioBitrate,
-        '-ac', String(audioChannels),
-        '-ar', String(audioSampleRate),
+        '-map', '0:v',
+        '-map', '1:a',
       );
     } else {
       args.push('-an');
     }
 
     args.push(
-      // Output format
       '-f', 'mp4',
       '-movflags', '+frag_every_frame+empty_moov+default_base_moof',
       '-flush_packets', '1',
       'pipe:1',
     );
 
-    this.emit('log', `Starting ffmpeg: screen=${screenIndex} audio=${audioDevice ?? 'none'}`);
-    this.emit('log', `ffmpeg args: ${args.join(' ')}`);
+    this.emit('log', `Starting ffmpeg: screen=${screenIndex} audio=${audio.mode}${audio.appBundleId ? ` app=${audio.appBundleId}` : ''}`);
 
     const proc = spawn('ffmpeg', args, {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -112,7 +134,8 @@ export class Capture extends EventEmitter {
       clearTimeout(noDataTimer);
       if (this.#stopped) return;
       this.emit('log', `FFmpeg exited with code ${code}, restarting...`);
-      setTimeout(() => this.#spawn(screenIndex, audioDevice), 1000);
+      this.#cleanupAudioHelper();
+      setTimeout(() => this.#spawn(screenIndex, audio), 1000);
       this.emit('restart');
     });
 
@@ -121,8 +144,61 @@ export class Capture extends EventEmitter {
     });
   }
 
+  #setupAudioHelper(audio: AudioConfig): void {
+    const binPath = resolveScAudioPath();
+    if (!binPath) {
+      this.emit('log', 'WARNING: sc-audio helper not found. Audio will be disabled.');
+      return;
+    }
+
+    // Create named pipe (FIFO)
+    this.#fifoPath = `/tmp/screencast-audio-${process.pid}.pcm`;
+    if (existsSync(this.#fifoPath)) {
+      unlinkSync(this.#fifoPath);
+    }
+    execSync(`mkfifo "${this.#fifoPath}"`);
+
+    // Build sc-audio args
+    const helperArgs = ['capture', '--output', this.#fifoPath];
+    if (audio.mode === 'app' && audio.appBundleId) {
+      helperArgs.push('--app', audio.appBundleId);
+    }
+
+    this.emit('log', `Starting sc-audio: ${helperArgs.join(' ')}`);
+
+    this.#audioHelper = spawn(binPath, helperArgs, {
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+
+    this.#audioHelper.stderr!.on('data', (data: Buffer) => {
+      const msg = data.toString().trim();
+      if (msg) this.emit('log', `[sc-audio] ${msg}`);
+    });
+
+    this.#audioHelper.on('error', (err: Error) => {
+      this.emit('log', `[sc-audio] Error: ${err.message}`);
+    });
+
+    this.#audioHelper.on('close', (code: number | null) => {
+      if (this.#stopped) return;
+      this.emit('log', `[sc-audio] Exited with code ${code}`);
+    });
+  }
+
+  #cleanupAudioHelper(): void {
+    if (this.#audioHelper) {
+      this.#audioHelper.kill('SIGTERM');
+      this.#audioHelper = null;
+    }
+    if (this.#fifoPath && existsSync(this.#fifoPath)) {
+      try { unlinkSync(this.#fifoPath); } catch {}
+      this.#fifoPath = null;
+    }
+  }
+
   stop(): void {
     this.#stopped = true;
+    this.#cleanupAudioHelper();
     if (this.#process) {
       this.#process.kill('SIGTERM');
       this.#process = null;

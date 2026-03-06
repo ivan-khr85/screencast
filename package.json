@@ -1,6 +1,6 @@
 {
   "name": "screencast",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "description": "Stream your macOS screen + audio to friends via browser",
   "author": "Ivan Khr",
   "main": "dist/electron/main.js",
@@ -9,7 +9,8 @@
   },
   "type": "module",
   "scripts": {
-    "build": "tsc && npm run build:electron && npm run copy-assets",
+    "build": "tsc && npm run build:electron && npm run build:swift && npm run copy-assets",
+    "build:swift": "cd swift/sc-audio && swift build -c release",
     "build:electron": "esbuild electron/main.ts --bundle --platform=node --format=cjs --outfile=dist/electron/main.cjs --external:electron --sourcemap --define:import.meta.url=import_meta_url --banner:js=\"var import_meta_url=require('url').pathToFileURL(__filename).href;\"",
     "copy-assets": "bash scripts/copy-assets.sh",
     "start": "npm run build && node dist/bin/cli.js",
@@ -37,6 +38,10 @@
       {
         "from": "resources",
         "to": "."
+      },
+      {
+        "from": "swift/sc-audio/.build/release/sc-audio",
+        "to": "sc-audio"
       }
     ],
     "icon": "resources/icon.png",

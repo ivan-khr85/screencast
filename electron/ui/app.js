@@ -10,12 +10,37 @@
     streamPassword: document.getElementById('stream-password'),
     viewerCount: document.getElementById('viewer-count'),
     audioNote: document.getElementById('audio-note'),
+    audioMode: document.getElementById('audioMode'),
+    audioAppField: document.getElementById('audioAppField'),
+    audioApp: document.getElementById('audioApp'),
   };
 
-  const LATENCY_BITRATES = { 'ultra-low': '15000k', 'medium': '10000k', 'slow': '5000k' };
+  const LATENCY_BITRATES = { 'ultra-low': '19500k', 'medium': '13000k', 'slow': '6500k' };
   document.getElementById('latency').addEventListener('change', function() {
-    document.getElementById('bitrate').value = LATENCY_BITRATES[this.value] || '15000k';
+    document.getElementById('bitrate').value = LATENCY_BITRATES[this.value] || '19500k';
   });
+
+  // Audio mode switching — show/hide app picker
+  els.audioMode.addEventListener('change', function() {
+    if (this.value === 'app') {
+      els.audioAppField.classList.remove('hidden');
+      loadAudioApps();
+    } else {
+      els.audioAppField.classList.add('hidden');
+    }
+  });
+
+  async function loadAudioApps() {
+    els.audioApp.innerHTML = '<option value="">Loading...</option>';
+    const apps = await window.api.listAudioApps();
+    els.audioApp.innerHTML = '<option value="">Select app...</option>';
+    for (const app of apps) {
+      const opt = document.createElement('option');
+      opt.value = app.bundleID;
+      opt.textContent = app.name;
+      els.audioApp.appendChild(opt);
+    }
+  }
 
   // Load initial status
   window.api.getStatus().then(updateUI);
@@ -76,6 +101,7 @@
       btn.disabled = true;
       btn.textContent = 'Starting...';
 
+      const audioMode = els.audioMode.value;
       const config = {
         port: parseInt(document.getElementById('port').value, 10),
         fps: parseInt(document.getElementById('fps').value, 10),
@@ -84,7 +110,8 @@
         latency: document.getElementById('latency').value,
         password: document.getElementById('password').value,
         maxViewers: parseInt(document.getElementById('maxViewers').value, 10),
-        audio: document.getElementById('audio').checked,
+        audioMode: audioMode,
+        audioAppBundleId: audioMode === 'app' ? els.audioApp.value : undefined,
         tunnel: document.getElementById('tunnel').checked,
         chat: document.getElementById('chat').checked,
       };

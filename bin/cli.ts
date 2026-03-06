@@ -5,8 +5,8 @@ import { Capture, listDevices } from '../src/capture.js';
 import { StreamServer } from '../src/server.js';
 import { generatePassword } from '../src/auth.js';
 import { Tunnel } from '../src/tunnel.js';
-import { detectBlackHole, printAudioSetupGuide } from '../src/audio-setup.js';
-import { DEFAULTS } from '../src/constants.js';
+import { isScreenCaptureKitAvailable, listAudioApps } from '../src/audio-setup.js';
+import { DEFAULTS, AudioConfig, AudioMode } from '../src/constants.js';
 
 interface CliOptions {
   port: string;
@@ -15,8 +15,11 @@ interface CliOptions {
   password?: string;
   maxViewers: string;
   audio: boolean;
+  audioMode?: string;
+  audioApp?: string;
   tunnel: boolean;
   listDevices?: boolean;
+  listApps?: boolean;
 }
 
 program
@@ -28,8 +31,11 @@ program
   .option('--password <string>', 'Custom password (default: auto-generated)')
   .option('--max-viewers <number>', 'Maximum concurrent viewers', String(DEFAULTS.maxViewers))
   .option('--no-audio', 'Disable audio capture')
+  .option('--audio-mode <mode>', 'Audio mode: system, app, none (default: system)')
+  .option('--audio-app <bundleID>', 'Bundle ID of app to capture audio from')
   .option('--no-tunnel', 'Disable cloudflared tunnel (LAN only)')
-  .option('--list-devices', 'List available capture devices and exit');
+  .option('--list-devices', 'List available capture devices and exit')
+  .option('--list-apps', 'List available apps for audio capture and exit');
 
 program.parse();
 const opts = program.opts<CliOptions>();
@@ -50,6 +56,18 @@ if (opts.listDevices) {
   process.exit(0);
 }
 
+if (opts.listApps) {
+  const apps = await listAudioApps();
+  if (apps.length === 0) {
+    console.log('\nNo apps found. Is sc-audio built? Run: npm run build:swift\n');
+  } else {
+    console.log('\nApps available for audio capture:');
+    for (const app of apps) console.log(`  ${app.name} (${app.bundleID})`);
+    console.log();
+  }
+  process.exit(0);
+}
+
 const port = parseInt(opts.port, 10);
 const fps = parseInt(opts.fps, 10);
 const maxViewers = parseInt(opts.maxViewers, 10);
@@ -58,13 +76,10 @@ const wantAudio = opts.audio !== false;
 const wantTunnel = opts.tunnel !== false;
 
 // Detect devices
-let screenIndex = '1'; // Default: first screen (Capture Entire Display)
-let audioDevice: string | null = null;
+let screenIndex = '1';
 
 try {
-  const { screens, audioDevices } = await listDevices();
-
-  // Prefer "Capture screen" devices over cameras
+  const { screens } = await listDevices();
   const screenDevices = screens.filter((d) => /capture screen|screen/i.test(d.name));
   const selectedScreen = screenDevices[0] || screens[0];
 
@@ -73,20 +88,31 @@ try {
     process.exit(1);
   }
   screenIndex = selectedScreen.index;
-
-  if (wantAudio) {
-    const blackhole = await detectBlackHole();
-    if (blackhole) {
-      audioDevice = blackhole.index;
-    } else {
-      printAudioSetupGuide();
-      console.log('  Continuing without audio...\n');
-    }
-  }
 } catch (err) {
   console.error('Failed to detect devices. Is FFmpeg installed?');
   console.error(`  ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
+}
+
+// Resolve audio config
+let audioConfig: AudioConfig = { mode: 'none' };
+
+if (wantAudio) {
+  const explicitMode = opts.audioMode as AudioMode | undefined;
+
+  if (explicitMode === 'none') {
+    audioConfig = { mode: 'none' };
+  } else if (explicitMode === 'app' && opts.audioApp) {
+    audioConfig = { mode: 'app', appBundleId: opts.audioApp };
+  } else if (isScreenCaptureKitAvailable()) {
+    audioConfig = explicitMode === 'app' && opts.audioApp
+      ? { mode: 'app', appBundleId: opts.audioApp }
+      : { mode: 'system' };
+  } else {
+    console.log('\n  Audio capture requires the sc-audio helper (ScreenCaptureKit, macOS 13+).');
+    console.log('  Build it with: npm run build:swift');
+    console.log('  Continuing without audio...\n');
+  }
 }
 
 // Start server
@@ -101,7 +127,7 @@ await server.listen(port);
 const capture = new Capture({
   fps,
   bitrate: opts.bitrate,
-  gopSize: fps, // 1 keyframe per second
+  gopSize: fps,
 });
 
 capture.on('data', (chunk) => server.pushData(chunk));
@@ -118,7 +144,7 @@ capture.on('error', (err) => {
   console.error(`  [ffmpeg] ${err.message}`);
 });
 
-capture.start(screenIndex, audioDevice);
+capture.start(screenIndex, audioConfig);
 
 // Start tunnel
 let tunnelUrl: string | null = null;
@@ -145,7 +171,7 @@ function printStatus(): void {
   Password: ${password}
   Link:     ${tunnelUrl || `http://localhost:${port}`}#${password}
   Viewers:  ${viewerCount}/${viewerMax}
-${audioDevice != null ? '' : '  (no audio)'}  Press Ctrl+C to stop.
+${audioConfig.mode === 'none' ? '  (no audio)' : `  Audio: ${audioConfig.mode}${audioConfig.appBundleId ? ` (${audioConfig.appBundleId})` : ''}`}  Press Ctrl+C to stop.
   ─────────────────────
 `);
 }

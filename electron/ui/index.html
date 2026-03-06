@@ -26,7 +26,7 @@
       </div>
       <div class="field">
         <label>Bitrate</label>
-        <input type="text" id="bitrate" value="15000k">
+        <input type="text" id="bitrate" value="19500k">
       </div>
       <div class="field">
         <label>Quality</label>
@@ -54,10 +54,17 @@
       </div>
       <div class="field">
         <label>Audio</label>
-        <label class="toggle">
-          <input type="checkbox" id="audio" checked>
-          <span class="slider"></span>
-        </label>
+        <select id="audioMode">
+          <option value="system" selected>System Audio</option>
+          <option value="app">App Audio</option>
+          <option value="none">No Audio</option>
+        </select>
+      </div>
+      <div class="field hidden" id="audioAppField">
+        <label>App</label>
+        <select id="audioApp">
+          <option value="">Select app...</option>
+        </select>
       </div>
       <div class="field">
         <label>Public Tunnel</label>
@@ -117,7 +124,7 @@
     </div>
 
     <div id="audio-note" class="audio-note hidden">
-      No audio device detected
+      Audio capture unavailable
     </div>
   </div>
 

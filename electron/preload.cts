@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('api', {
 
   listDevices: () => ipcRenderer.invoke('devices:list'),
 
+  listAudioApps: () => ipcRenderer.invoke('audio:list-apps'),
+
   copyToClipboard: (text: string) => ipcRenderer.invoke('clipboard:copy', text),
 
   setChat: (enabled: boolean) => ipcRenderer.invoke('stream:set-chat', enabled),

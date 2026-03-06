@@ -1,3 +1,7 @@
 node_modules/
 dist/
 release/
+
+# Swift build artifacts
+swift/sc-audio/.build/
+swift/sc-audio/.swiftpm/

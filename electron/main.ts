@@ -30,8 +30,8 @@ import { Capture, listDevices } from '../src/capture.js';
 import { StreamServer } from '../src/server.js';
 import { generatePassword } from '../src/auth.js';
 import { Tunnel } from '../src/tunnel.js';
-import { detectBlackHole } from '../src/audio-setup.js';
-import { DEFAULTS, LATENCY_PRESETS, LatencyMode } from '../src/constants.js';
+import { isScreenCaptureKitAvailable, listAudioApps } from '../src/audio-setup.js';
+import { DEFAULTS, LATENCY_PRESETS, LatencyMode, AudioConfig, AudioMode } from '../src/constants.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -41,7 +41,7 @@ interface ReadinessResult {
   ready: boolean;
   hasBrew: boolean;
   hasFFmpeg: boolean;
-  hasBlackHole: boolean;
+  hasScAudio: boolean;
   hasCloudflared: boolean;
   screenRecording: 'granted' | 'denied' | 'unknown';
 }
@@ -59,13 +59,7 @@ async function checkReadiness(): Promise<ReadinessResult> {
     commandExists('cloudflared'),
   ]);
 
-  let hasBlackHole = false;
-  try {
-    const { audioDevices } = await listDevices();
-    hasBlackHole = audioDevices.some((d) => d.name.includes('BlackHole'));
-  } catch {
-    // ffmpeg not installed yet — can't list devices
-  }
+  const hasScAudio = isScreenCaptureKitAvailable();
 
   let screenRecording: 'granted' | 'denied' | 'unknown' = 'unknown';
   if (process.platform === 'darwin') {
@@ -74,10 +68,10 @@ async function checkReadiness(): Promise<ReadinessResult> {
   }
 
   return {
-    ready: hasFFmpeg && hasBlackHole && hasCloudflared && screenRecording !== 'denied',
+    ready: hasFFmpeg && hasCloudflared && screenRecording !== 'denied',
     hasBrew,
     hasFFmpeg,
-    hasBlackHole,
+    hasScAudio,
     hasCloudflared,
     screenRecording,
   };
@@ -120,16 +114,6 @@ async function autoSetup(
     }
   }
 
-  if (!initial.hasBlackHole) {
-    sendProgress('Installing BlackHole audio driver...');
-    try {
-      await brewInstall('blackhole-2ch');
-      sendProgress('BlackHole installed. A Multi-Output Device may need to be configured in Audio MIDI Setup.');
-    } catch (err) {
-      sendProgress(`Failed to install BlackHole: ${err instanceof Error ? err.message : err}`);
-    }
-  }
-
   if (!initial.hasCloudflared) {
     sendProgress('Installing cloudflared...');
     try {
@@ -162,7 +146,8 @@ interface StreamConfig {
   latency: LatencyMode;
   password: string;
   maxViewers: number;
-  audio: boolean;
+  audioMode: AudioMode;
+  audioAppBundleId?: string;
   tunnel: boolean;
   chat: boolean;
 }
@@ -285,11 +270,11 @@ async function startStream(config: StreamConfig): Promise<void> {
   const selectedScreen = screenDevices[0] || screens[0];
   if (!selectedScreen) throw new Error('No screen capture devices found');
 
-  let audioDevice: string | null = null;
-  if (config.audio) {
-    const bh = await detectBlackHole();
-    if (bh) audioDevice = bh.index;
-  }
+  const audioConfig: AudioConfig = config.audioMode === 'none'
+    ? { mode: 'none' }
+    : config.audioMode === 'app' && config.audioAppBundleId
+      ? { mode: 'app', appBundleId: config.audioAppBundleId }
+      : { mode: config.audioMode || 'system' };
 
   const password = config.password || generatePassword();
   const port = config.port;
@@ -327,7 +312,7 @@ async function startStream(config: StreamConfig): Promise<void> {
       pushStatus();
     }
   });
-  capture.start(selectedScreen.index, audioDevice);
+  capture.start(selectedScreen.index, audioConfig);
 
   let url = `http://localhost:${port}`;
   if (config.tunnel) {
@@ -345,7 +330,7 @@ async function startStream(config: StreamConfig): Promise<void> {
     password,
     viewers: 0,
     maxViewers: config.maxViewers,
-    hasAudio: audioDevice !== null,
+    hasAudio: audioConfig.mode !== 'none',
     error: null,
   };
 
@@ -482,6 +467,14 @@ ipcMain.handle('devices:list', async () => {
       audioDevices: [],
       error: err instanceof Error ? err.message : String(err),
     };
+  }
+});
+
+ipcMain.handle('audio:list-apps', async () => {
+  try {
+    return await listAudioApps();
+  } catch {
+    return [];
   }
 });
 
