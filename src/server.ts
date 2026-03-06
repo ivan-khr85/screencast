@@ -306,11 +306,7 @@ export class StreamServer {
 
     const pc = new RTCPeerConnection({
       codecs,
-      iceServers: [
-        { urls: "stun:stun.l.google.com:19302" },
-        { urls: "stun:stun1.l.google.com:19302" },
-        { urls: "stun:stun2.l.google.com:19302" },
-      ],
+      iceServers: this.#config.iceServers,
       // Include all local network interface IPs so remote viewers on the
       // same LAN can reach us via host candidates. Also includes 127.0.0.1
       // for same-machine viewers (browsers send mDNS-obfuscated candidates
@@ -341,7 +337,7 @@ export class StreamServer {
             if (state === 'complete') { sub.unSubscribe(); resolve(); }
           });
         }),
-        new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+        new Promise<void>((resolve) => setTimeout(resolve, 10000)),
       ]);
     }
 
@@ -365,12 +361,12 @@ export class StreamServer {
     // Timeout: disconnect if DTLS+ICE don't complete within 15s
     const connectionTimeout = setTimeout(() => {
       if (!viewer.ready) {
-        console.warn('[webrtc] connection timeout — DTLS/ICE did not complete within 15s');
+        console.warn('[webrtc] connection timeout — DTLS/ICE did not complete within 35s');
         if (this.#viewers.has(ws)) {
           ws.close(4011, "WebRTC connection timed out");
         }
       }
-    }, 15000);
+    }, 35000);
     ws.on("close", () => clearTimeout(connectionTimeout));
 
     // ICE state — logging only (not used for ready gate)
@@ -402,10 +398,11 @@ export class StreamServer {
     this.#viewers.set(ws, viewer);
     this.#notifyViewerCount();
 
-    // Send the offer to the browser
+    // Send the offer to the browser (include ICE servers so the browser uses the same TURN config)
     ws.send(JSON.stringify({
       type: "webrtc_offer",
       sdp: pc.localDescription!.sdp,
+      iceServers: this.#config.iceServers,
     }));
 
     // Send stream info

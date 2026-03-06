@@ -342,7 +342,7 @@
     try {
       const msg = JSON.parse(data);
       if (msg.type === 'webrtc_offer') {
-        handleWebRTCOffer(msg.sdp);
+        handleWebRTCOffer(msg.sdp, msg.iceServers);
       } else if (msg.type === 'stream_info') {
         streamInfo.fps = msg.fps || null;
         streamInfo.bitrate = msg.bitrate || null;
@@ -363,40 +363,42 @@
     } catch {}
   }
 
-  async function handleWebRTCOffer(sdp) {
+  async function handleWebRTCOffer(sdp, iceServers) {
     cleanupPeerConnection();
 
-    pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-      ],
+    const localPc = new RTCPeerConnection({
+      iceServers: iceServers || [{ urls: 'stun:stun.l.google.com:19302' }],
     });
+    pc = localPc;
 
-    pc.ontrack = (event) => {
+    localPc.ontrack = (event) => {
       console.log('[viewer] ontrack:', event.track.kind, 'streams:', event.streams.length);
       if (event.track.kind === 'video') {
         if (!video.srcObject) {
           video.srcObject = event.streams[0] || new MediaStream([event.track]);
           video.muted = isMuted;
-          video.play().catch((err) => console.warn('[viewer] video.play() rejected:', err));
+          video.play().catch((err) => { if (err.name !== 'AbortError') console.warn('[viewer] video.play() rejected:', err); });
         }
       } else if (event.track.kind === 'audio' && video.srcObject) {
         video.srcObject.addTrack(event.track);
       }
     };
 
-    pc.onconnectionstatechange = () => {
-      console.log('[viewer] connectionState:', pc?.connectionState);
+    localPc.onconnectionstatechange = () => {
+      console.log('[viewer] connectionState:', localPc.connectionState);
     };
 
-    pc.oniceconnectionstatechange = () => {
-      const state = pc?.iceConnectionState;
+    localPc.onicecandidateerror = (e) => {
+      console.warn(`[viewer] ICE candidate error: ${e.url} — ${e.errorCode} ${e.errorText}`);
+    };
+
+    localPc.oniceconnectionstatechange = () => {
+      const state = localPc.iceConnectionState;
       console.log('[viewer] iceConnectionState:', state);
       if (state === 'failed') {
         showError('WebRTC connection failed. You may be behind a firewall that blocks UDP.');
         setStatus('Connection failed', 'error');
+        scheduleReconnect();
       } else if (state === 'disconnected') {
         setStatus('Reconnecting...', 'reconnecting');
       } else if (state === 'connected' || state === 'completed') {
@@ -407,33 +409,38 @@
     };
 
     try {
-      await pc.setRemoteDescription({ type: 'offer', sdp: sdp });
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
+      await localPc.setRemoteDescription({ type: 'offer', sdp: sdp });
+      const answer = await localPc.createAnswer();
+      await localPc.setLocalDescription(answer);
 
       // Wait for ICE gathering to complete (with timeout) so all candidates
       // are in the SDP. werift requires candidates in the answer SDP.
+      const iceGatherStart = Date.now();
       await new Promise((resolve) => {
-        if (pc.iceGatheringState === 'complete') {
+        if (localPc.iceGatheringState === 'complete') {
           resolve();
         } else {
           const timeout = setTimeout(() => {
             console.warn('[viewer] ICE gathering timed out after 5s, sending partial answer');
             resolve();
           }, 5000);
-          pc.addEventListener('icegatheringstatechange', function onState() {
-            if (pc.iceGatheringState === 'complete') {
+          localPc.addEventListener('icegatheringstatechange', function onState() {
+            if (localPc.iceGatheringState === 'complete') {
               clearTimeout(timeout);
-              pc.removeEventListener('icegatheringstatechange', onState);
+              localPc.removeEventListener('icegatheringstatechange', onState);
+              console.log(`[viewer] ICE gathering complete in ${Date.now() - iceGatherStart}ms`);
               resolve();
             }
           });
         }
       });
 
+      // Bail out if this PC was replaced by a reconnect while we were waiting
+      if (pc !== localPc || !localPc.localDescription) return;
+
       ws.send(JSON.stringify({
         type: 'webrtc_answer',
-        sdp: pc.localDescription.sdp,
+        sdp: localPc.localDescription.sdp,
       }));
     } catch (err) {
       showError('WebRTC setup failed: ' + err.message);

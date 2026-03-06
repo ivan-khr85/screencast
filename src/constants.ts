@@ -1,4 +1,6 @@
-export type AudioMode = 'system' | 'app' | 'none';
+import { RTCIceServer } from "werift";
+
+export type AudioMode = "system" | "app" | "none";
 
 export interface AudioConfig {
   mode: AudioMode;
@@ -18,6 +20,7 @@ export interface Config {
   maxViewers: number;
   authTimeout: number;
   passwordLength: number;
+  iceServers: RTCIceServer[];
 }
 
 export const DEFAULTS: Config = {
@@ -33,4 +36,24 @@ export const DEFAULTS: Config = {
   maxViewers: 5,
   authTimeout: 5000,
   passwordLength: 4, // bytes → 8 hex chars
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:stun2.l.google.com:19302" },
+    {
+      urls: "turn:openrelay.metered.ca:80",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443?transport=tcp",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+    {
+      urls: "turns:openrelay.metered.ca:443?transport=tcp",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+  ],
 };
