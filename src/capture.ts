@@ -55,8 +55,11 @@ export class Capture extends EventEmitter {
     ];
 
     if (hasAudio && this.#fifoPath) {
-      // Input 1: Audio from FIFO (ScreenCaptureKit raw PCM)
+      // Input 1: Audio from FIFO — skip probing (format is known)
       args.push(
+        '-thread_queue_size', '512',
+        '-probesize', '32',
+        '-analyzeduration', '0',
         '-f', 'f32le',
         '-ar', String(audioSampleRate),
         '-ac', String(audioChannels),
@@ -94,6 +97,7 @@ export class Capture extends EventEmitter {
     }
 
     args.push(
+      '-max_delay', '0',
       '-f', 'mp4',
       '-movflags', '+frag_every_frame+empty_moov+default_base_moof',
       '-flush_packets', '1',

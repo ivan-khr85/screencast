@@ -500,7 +500,7 @@
       const behind = liveEdge - video.currentTime;
 
       if (behind > LIVE_EDGE_THRESHOLD) {
-        video.currentTime = liveEdge - 0.1;
+        video.currentTime = liveEdge - 0.05;
       }
 
       // Evict old buffer
@@ -510,7 +510,7 @@
         }
       }
     } catch {}
-  }, 500);
+  }, 200);
 
   // Mute toggle
   const muteToggle = document.getElementById('mute-toggle');

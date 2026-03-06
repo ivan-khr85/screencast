@@ -18,8 +18,8 @@ export const LATENCY_PRESETS: Record<LatencyMode, LatencyPreset> = {
   "ultra-low": {
     gopMultiplier: 1 / 6,
     bufsize: "6500k",
-    liveEdgeThreshold: 0.3,
-    bufferEvictionSeconds: 2,
+    liveEdgeThreshold: 0.15,
+    bufferEvictionSeconds: 1,
   },
   medium: {
     gopMultiplier: 0.5,
@@ -68,7 +68,7 @@ export const DEFAULTS: Config = {
   maxViewers: 5,
   authTimeout: 5000,
   backpressureLimit: 4 * 1024 * 1024,
-  bufferEvictionSeconds: 2,
-  liveEdgeThreshold: 0.3, // seconds behind live to trigger seek
+  bufferEvictionSeconds: 1,
+  liveEdgeThreshold: 0.15, // seconds behind live to trigger seek
   passwordLength: 4, // bytes → 8 hex chars
 };
