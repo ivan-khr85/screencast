@@ -255,15 +255,23 @@ export class StreamServer {
   }
 
   #handleHttp(req: http.IncomingMessage, res: http.ServerResponse): void {
-    if (req.url === "/" || req.url === "/index.html") {
-      const viewerPath = path.join(__dirname, "viewer.html");
-      fs.readFile(viewerPath, (err, data) => {
+    const STATIC_FILES: Record<string, { file: string; type: string }> = {
+      "/": { file: "viewer.html", type: "text/html; charset=utf-8" },
+      "/index.html": { file: "viewer.html", type: "text/html; charset=utf-8" },
+      "/viewer.css": { file: "viewer.css", type: "text/css; charset=utf-8" },
+      "/viewer.js": { file: "viewer.js", type: "application/javascript; charset=utf-8" },
+    };
+
+    const entry = STATIC_FILES[req.url ?? ""];
+    if (entry) {
+      const filePath = path.join(__dirname, entry.file);
+      fs.readFile(filePath, (err, data) => {
         if (err) {
           res.writeHead(500);
           res.end("Server error");
           return;
         }
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.writeHead(200, { "Content-Type": entry.type });
         res.end(data);
       });
       return;

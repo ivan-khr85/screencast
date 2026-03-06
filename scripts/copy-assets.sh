@@ -3,9 +3,12 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# Viewer page
+# Viewer page + assets
 mkdir -p "$ROOT/dist/src"
-cp "$ROOT/src/viewer.html" "$ROOT/dist/src/viewer.html"
+cp "$ROOT/src/viewer.html" \
+   "$ROOT/src/viewer.css" \
+   "$ROOT/src/viewer.js" \
+   "$ROOT/dist/src/"
 
 # Electron UI
 mkdir -p "$ROOT/dist/electron/ui"

@@ -17,19 +17,19 @@ export interface LatencyPreset {
 export const LATENCY_PRESETS: Record<LatencyMode, LatencyPreset> = {
   "ultra-low": {
     gopMultiplier: 1 / 6,
-    bufsize: "2600k",
+    bufsize: "6500k",
     liveEdgeThreshold: 0.3,
     bufferEvictionSeconds: 2,
   },
   medium: {
     gopMultiplier: 0.5,
-    bufsize: "6500k",
+    bufsize: "16250k",
     liveEdgeThreshold: 1,
     bufferEvictionSeconds: 5,
   },
   slow: {
     gopMultiplier: 2,
-    bufsize: "13000k",
+    bufsize: "32500k",
     liveEdgeThreshold: 3,
     bufferEvictionSeconds: 15,
   },
@@ -57,10 +57,10 @@ export interface Config {
 export const DEFAULTS: Config = {
   port: 8080,
   fps: 60,
-  bitrate: "19500k",
-  maxrate: "33800k",
-  bufsize: "2600k",
-  audioBitrate: "166k",
+  bitrate: "48750k",
+  maxrate: "84500k",
+  bufsize: "6500k",
+  audioBitrate: "415k",
   audioSampleRate: 48000,
   audioChannels: 2,
   gopSize: 10,

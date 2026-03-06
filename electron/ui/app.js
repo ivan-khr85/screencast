@@ -15,9 +15,9 @@
     audioApp: document.getElementById('audioApp'),
   };
 
-  const LATENCY_BITRATES = { 'ultra-low': '19500k', 'medium': '13000k', 'slow': '6500k' };
+  const LATENCY_BITRATES = { 'ultra-low': '48750k', 'medium': '32500k', 'slow': '16250k' };
   document.getElementById('latency').addEventListener('change', function() {
-    document.getElementById('bitrate').value = LATENCY_BITRATES[this.value] || '19500k';
+    document.getElementById('bitrate').value = LATENCY_BITRATES[this.value] || '48750k';
   });
 
   // Audio mode switching — show/hide app picker
