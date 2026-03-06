@@ -12,11 +12,21 @@ contextBridge.exposeInMainWorld('api', {
 
   copyToClipboard: (text: string) => ipcRenderer.invoke('clipboard:copy', text),
 
+  setChat: (enabled: boolean) => ipcRenderer.invoke('stream:set-chat', enabled),
+
   onStatusUpdate: (callback: (status: Record<string, unknown>) => void) => {
     ipcRenderer.on(
       'stream:status-update',
       (_event: Electron.IpcRendererEvent, status: Record<string, unknown>) =>
         callback(status),
+    );
+  },
+
+  onChatMessage: (callback: (msg: { sender: string; message: string }) => void) => {
+    ipcRenderer.on(
+      'stream:chat-message',
+      (_event: Electron.IpcRendererEvent, msg: { sender: string; message: string }) =>
+        callback(msg),
     );
   },
 });

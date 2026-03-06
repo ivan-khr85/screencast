@@ -4,6 +4,7 @@ import {
   ipcMain,
   Tray,
   Menu,
+  Notification,
   nativeImage,
   clipboard,
   systemPreferences,
@@ -163,6 +164,7 @@ interface StreamConfig {
   maxViewers: number;
   audio: boolean;
   tunnel: boolean;
+  chat: boolean;
 }
 
 interface StreamStatus {
@@ -296,10 +298,13 @@ async function startStream(config: StreamConfig): Promise<void> {
 
   server = new StreamServer(password, {
     port,
+    fps: config.fps,
+    bitrate: config.bitrate,
     maxViewers: config.maxViewers,
     liveEdgeThreshold: preset.liveEdgeThreshold,
     bufferEvictionSeconds: preset.bufferEvictionSeconds,
   });
+  server.setChatEnabled(config.chat !== false);
   await server.listen(port);
 
   capture = new Capture({
@@ -347,6 +352,13 @@ async function startStream(config: StreamConfig): Promise<void> {
   server.onViewerCountChange((count) => {
     status.viewers = count;
     pushStatus();
+  });
+
+  server.onChat((sender, message) => {
+    mainWindow?.webContents.send('stream:chat-message', { sender, message });
+    if (Notification.isSupported()) {
+      new Notification({ title: sender, body: message, silent: true }).show();
+    }
   });
 
   pushStatus();
@@ -456,6 +468,10 @@ ipcMain.handle('stream:stop', () => {
 });
 
 ipcMain.handle('stream:get-status', () => status);
+
+ipcMain.handle('stream:set-chat', (_event, enabled: boolean) => {
+  server?.setChatEnabled(enabled);
+});
 
 ipcMain.handle('devices:list', async () => {
   try {

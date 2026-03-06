@@ -15,10 +15,14 @@ export class StreamServer {
   #mp4frag: Mp4Frag;
   #authenticate: (ws: WebSocket) => Promise<void>;
   #viewers = new Set<WebSocket>();
+  #viewerNames = new Map<WebSocket, string>();
   #waitingForInit = new Set<WebSocket>();
   #config: Config;
   #viewerCountCallback?: (count: number) => void;
+  #chatCallback?: (sender: string, message: string) => void;
+  #chatEnabled = true;
   #mime: string | null = null;
+  #takenNames = new Set<string>();
 
   constructor(password: string, config: Partial<Config> = {}) {
     this.#config = { ...DEFAULTS, ...config };
@@ -76,8 +80,25 @@ export class StreamServer {
     this.#viewerCountCallback = callback;
   }
 
+  onChat(callback: (sender: string, message: string) => void): void {
+    this.#chatCallback = callback;
+  }
+
+  setChatEnabled(enabled: boolean): void {
+    this.#chatEnabled = enabled;
+    const msg = JSON.stringify({ type: "chat_enabled", enabled });
+    for (const ws of this.#viewers) {
+      if (ws.readyState === WebSocket.OPEN) ws.send(msg);
+    }
+  }
+
   #notifyViewerCount(): void {
-    this.#viewerCountCallback?.(this.#viewers.size);
+    const count = this.#viewers.size;
+    this.#viewerCountCallback?.(count);
+    const msg = JSON.stringify({ type: "viewer_count", count });
+    for (const ws of this.#viewers) {
+      if (ws.readyState === WebSocket.OPEN) ws.send(msg);
+    }
   }
 
   pushData(chunk: Buffer): void {
@@ -95,6 +116,8 @@ export class StreamServer {
       viewer.close(4010, "Stream restarting");
     }
     this.#viewers.clear();
+    this.#viewerNames.clear();
+    this.#takenNames.clear();
     this.#waitingForInit.clear();
     this.#notifyViewerCount();
 
@@ -138,17 +161,70 @@ export class StreamServer {
       this.#waitingForInit.add(ws);
     }
 
-    ws.on("close", () => {
-      this.#viewers.delete(ws);
-      this.#waitingForInit.delete(ws);
-      this.#notifyViewerCount();
+    // Tell viewer whether chat is enabled
+    ws.send(JSON.stringify({ type: "chat_enabled", enabled: this.#chatEnabled }));
+
+    ws.on("message", (raw) => {
+      let str: string;
+      if (typeof raw === "string") {
+        str = raw;
+      } else {
+        try { str = raw.toString(); } catch { return; }
+      }
+      try {
+        const msg = JSON.parse(str);
+        if (msg.type === "set_name" && typeof msg.name === "string") {
+          const name = msg.name.trim().slice(0, 30);
+          if (!name) {
+            ws.send(JSON.stringify({ type: "name_result", success: false, error: "Name cannot be empty" }));
+            return;
+          }
+          const lower = name.toLowerCase();
+          // Check if another viewer already has this name
+          for (const [other, existing] of this.#viewerNames) {
+            if (other !== ws && existing.toLowerCase() === lower) {
+              ws.send(JSON.stringify({ type: "name_result", success: false, error: "Name already taken" }));
+              return;
+            }
+          }
+          // Remove old name from taken set
+          const oldName = this.#viewerNames.get(ws);
+          if (oldName) this.#takenNames.delete(oldName.toLowerCase());
+          this.#viewerNames.set(ws, name);
+          this.#takenNames.add(lower);
+          ws.send(JSON.stringify({ type: "name_result", success: true, name }));
+          return;
+        }
+        if (msg.type === "chat" && typeof msg.message === "string") {
+          if (!this.#chatEnabled) return;
+          const sender = this.#viewerNames.get(ws);
+          if (!sender) return; // Must set name first
+          const text = msg.message.trim().slice(0, 500);
+          if (!text) return;
+          this.#broadcastChat(sender, text);
+          this.#chatCallback?.(sender, text);
+        }
+      } catch {}
     });
 
-    ws.on("error", () => {
+    const removeViewer = () => {
+      const name = this.#viewerNames.get(ws);
+      if (name) this.#takenNames.delete(name.toLowerCase());
       this.#viewers.delete(ws);
+      this.#viewerNames.delete(ws);
       this.#waitingForInit.delete(ws);
       this.#notifyViewerCount();
-    });
+    };
+
+    ws.on("close", removeViewer);
+    ws.on("error", removeViewer);
+  }
+
+  #broadcastChat(sender: string, message: string): void {
+    const payload = JSON.stringify({ type: "chat", sender, message });
+    for (const ws of this.#viewers) {
+      if (ws.readyState === WebSocket.OPEN) ws.send(payload);
+    }
   }
 
   #broadcast(segment: Buffer): void {

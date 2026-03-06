@@ -82,10 +82,12 @@ npm run electron:build:win
 
 The app features:
 
-- **Control panel** — configure port, FPS, bitrate, password, max viewers, audio, and tunnel settings
+- **Control panel** — configure port, FPS, bitrate, quality, latency mode, password, max viewers, audio, tunnel, and chat settings
 - **System tray** — minimize to tray while streaming; quick access to copy URL/password, stop stream
 - **Live viewer count** — see connected viewers in real time
 - **One-click copy** — copy the stream URL and password to clipboard
+- **Chat toggle** — enable/disable viewer chat on-the-fly while streaming
+- **Chat notifications** — receive native OS notifications when viewers send messages
 
 > **Note:** Screen capture uses macOS AVFoundation. The Windows build target is available, but a Windows-specific capture backend (`gdigrab`/`dshow`) would need to be implemented for full Windows support.
 
@@ -157,7 +159,9 @@ screencast/
 │   ├── main.ts             # Electron main process (window, tray, stream management)
 │   ├── preload.cts         # Secure IPC bridge (CommonJS for Electron preload)
 │   └── ui/
-│       └── index.html      # Desktop app control panel UI
+│       ├── index.html      # Desktop app control panel markup
+│       ├── styles.css       # Desktop app styles
+│       └── app.js          # Desktop app logic
 ├── resources/
 │   ├── trayTemplate.png    # macOS menu bar tray icon
 │   └── trayTemplate@2x.png
@@ -174,6 +178,7 @@ screencast/
 - The player automatically stays at the live edge (skips ahead if falling behind)
 - If the connection drops, it reconnects automatically with exponential backoff
 - Old buffer is evicted to prevent memory buildup
+- **Chat** — click the chat button (bottom-right) to open the chat panel; enter a unique name to join, then send messages visible to all viewers and the streamer
 
 ## Technical Details
 
