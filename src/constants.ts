@@ -26,9 +26,9 @@ export interface Config {
 export const DEFAULTS: Config = {
   port: 8080,
   fps: 60,
-  bitrate: "48750k",
-  maxrate: "84500k",
-  bufsize: "6500k",
+  bitrate: "100750k",
+  maxrate: "550500k",
+  bufsize: "40000k",
   audioBitrate: "256k",
   audioSampleRate: 48000,
   audioChannels: 2,
