@@ -28,7 +28,7 @@ export const DEFAULTS: Config = {
   fps: 60,
   bitrate: "100750k",
   maxrate: "550500k",
-  bufsize: "40000k",
+  bufsize: "60000k",
   audioBitrate: "256k",
   audioSampleRate: 48000,
   audioChannels: 2,
