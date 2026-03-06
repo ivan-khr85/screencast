@@ -19,7 +19,7 @@ final class VideoCapture: NSObject, SCStreamOutput, SCStreamDelegate {
 
         let display = content.displays[displayIndex]
         let width = display.width
-        let height = display.height
+        let height = (display.height / 2) * 2  // Round down to even for NV12 4:2:0 compatibility
 
         // Pre-allocate NV12 frame buffer: Y plane (w*h) + UV plane (w*h/2)
         frameBuffer = Data(count: width * height * 3 / 2)

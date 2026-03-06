@@ -89,6 +89,7 @@ export class Capture extends EventEmitter {
       '-pixel_format', 'nv12',
       '-framerate', String(fps),
       '-i', sck ? screenIndex : `${screenIndex}:none`,
+      '-vf', 'crop=trunc(iw/16)*16:trunc(ih/16)*16:0:0',
       '-c:v', 'h264_videotoolbox',
       '-allow_sw', '1',
       '-realtime', 'true',
@@ -100,8 +101,17 @@ export class Capture extends EventEmitter {
       '-keyint_min', String(gopSize),
       '-profile:v', 'baseline',
       '-an',
-      '-f', 'rtp', `rtp://127.0.0.1:${port}`,
     ];
+
+    const recordTo = process.env.SCREENCAST_RECORD_TO;
+    if (recordTo) {
+      // Debug: write encoded video to file instead of RTP to check for encoding artifacts.
+      // WebRTC stream will be inactive. Open the file in VLC to inspect.
+      args.push('-f', 'matroska', recordTo);
+      console.log(`[capture] DEBUG recording to ${recordTo} — WebRTC stream inactive`);
+    } else {
+      args.push('-f', 'rtp', `rtp://127.0.0.1:${port}`);
+    }
 
     this.emit('log', `Starting ffmpeg: screen=${screenIndex} (RTP to port ${port})`);
     console.log(`[capture] #spawnVideo: port=${port}`);
@@ -255,6 +265,7 @@ export class Capture extends EventEmitter {
       '-video_size', videoSize,
       '-framerate', String(fps),
       '-i', 'pipe:0',
+      '-vf', 'crop=trunc(iw/16)*16:trunc(ih/16)*16:0:0',
       '-c:v', 'h264_videotoolbox',
       '-allow_sw', '1',
       '-realtime', 'true',
@@ -268,7 +279,13 @@ export class Capture extends EventEmitter {
       '-an',
     ];
 
-    ffmpegArgs.push('-f', 'rtp', `rtp://127.0.0.1:${port}`);
+    const recordTo = process.env.SCREENCAST_RECORD_TO;
+    if (recordTo) {
+      ffmpegArgs.push('-f', 'matroska', recordTo);
+      console.log(`[capture] DEBUG recording to ${recordTo} — WebRTC stream inactive`);
+    } else {
+      ffmpegArgs.push('-f', 'rtp', `rtp://127.0.0.1:${port}`);
+    }
     console.log(`[capture] encoder: ffmpeg ${ffmpegArgs.join(' ')}`);
 
     const encoder = spawn('ffmpeg', ffmpegArgs, { stdio: ['pipe', 'ignore', 'pipe'] });
