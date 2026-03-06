@@ -1,9 +1,9 @@
 {
   "name": "screencast",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Stream your macOS screen + audio to friends via browser",
   "author": "Ivan Khr",
-  "main": "dist/electron/main.js",
+  "main": "dist/electron/main.cjs",
   "bin": {
     "screencast": "./dist/bin/cli.js"
   },
@@ -32,7 +32,8 @@
     },
     "files": [
       "dist/**/*",
-      "!dist/**/*.map"
+      "!dist/**/*.map",
+      "node_modules/**/*"
     ],
     "extraResources": [
       {
@@ -45,6 +46,9 @@
       }
     ],
     "icon": "resources/icon.png",
+    "asarUnpack": [
+      "node_modules/@shinyoshiaki/binary-data/**"
+    ],
     "mac": {
       "target": [
         "dmg",
@@ -66,7 +70,8 @@
   },
   "dependencies": {
     "commander": "^12.1.0",
-    "mp4frag": "^0.7.0",
+    "werift": "^0.22.9",
+    "werift-rtp": "^0.8.8",
     "ws": "^8.18.0"
   },
   "devDependencies": {

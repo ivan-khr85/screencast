@@ -3,9 +3,11 @@ import Foundation
 // MARK: - Signal Handling
 
 var capture: AudioCapture?
+var videoCapture: VideoCapture?
 
 func handleSignal(_ signal: Int32) {
     capture?.stop()
+    videoCapture?.stop()
     exit(0)
 }
 
@@ -23,16 +25,21 @@ func printUsage() {
     Commands:
       list                        List running apps as JSON
       capture [options]           Capture audio as raw PCM (f32le, 48kHz, stereo)
+      capture-screen [options]    Capture screen as raw NV12 frames to stdout
 
     Capture options:
       --app <bundleID>            Capture audio from specific app (default: system audio)
       --output <path>             Write to file/FIFO instead of stdout
 
+    Capture-screen options:
+      --display <index>           Display index (default: 0)
+      --fps <n>                   Frames per second (default: 30)
+
     Examples:
       sc-audio list
       sc-audio capture
       sc-audio capture --app com.spotify.client
-      sc-audio capture --output /tmp/audio.pcm
+      sc-audio capture-screen --display 0 --fps 60
     """
     FileHandle.standardError.write(Data(usage.utf8))
 }
@@ -104,6 +111,40 @@ case "capture":
     FileHandle.standardError.write(Data("Capturing audio: \(mode)\n".utf8))
 
     // Keep running — RunLoop processes dispatch and SCK callbacks
+    RunLoop.main.run()
+
+case "capture-screen":
+    var displayIndex = 0
+    var fps = 30
+
+    var i = 2
+    while i < args.count {
+        switch args[i] {
+        case "--display":
+            i += 1
+            guard i < args.count, let n = Int(args[i]) else {
+                FileHandle.standardError.write(Data("Error: --display requires an integer\n".utf8))
+                exit(1)
+            }
+            displayIndex = n
+        case "--fps":
+            i += 1
+            guard i < args.count, let n = Int(args[i]) else {
+                FileHandle.standardError.write(Data("Error: --fps requires an integer\n".utf8))
+                exit(1)
+            }
+            fps = n
+        default:
+            FileHandle.standardError.write(Data("Unknown option: \(args[i])\n".utf8))
+            exit(1)
+        }
+        i += 1
+    }
+
+    videoCapture = VideoCapture()
+    try await videoCapture!.start(displayIndex: displayIndex, fps: fps)
+
+    // Keep running — SCK callbacks fire on the queue
     RunLoop.main.run()
 
 default:

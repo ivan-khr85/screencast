@@ -20,6 +20,7 @@ interface CliOptions {
   tunnel: boolean;
   listDevices?: boolean;
   listApps?: boolean;
+  screen?: string;
 }
 
 program
@@ -35,7 +36,8 @@ program
   .option('--audio-app <bundleID>', 'Bundle ID of app to capture audio from')
   .option('--no-tunnel', 'Disable cloudflared tunnel (LAN only)')
   .option('--list-devices', 'List available capture devices and exit')
-  .option('--list-apps', 'List available apps for audio capture and exit');
+  .option('--list-apps', 'List available apps for audio capture and exit')
+  .option('--screen <index>', 'Display index to capture (0 = main, see --list-devices)');
 
 program.parse();
 const opts = program.opts<CliOptions>();
@@ -76,22 +78,26 @@ const wantAudio = opts.audio !== false;
 const wantTunnel = opts.tunnel !== false;
 
 // Detect devices
-let screenIndex = '1';
+let screenIndex: string;
 
-try {
-  const { screens } = await listDevices();
-  const screenDevices = screens.filter((d) => /capture screen|screen/i.test(d.name));
-  const selectedScreen = screenDevices[0] || screens[0];
+if (opts.screen !== undefined) {
+  screenIndex = opts.screen;
+} else {
+  try {
+    const { screens } = await listDevices();
+    const screenDevices = screens.filter((d) => /capture screen|screen/i.test(d.name));
+    const selectedScreen = screenDevices[0] || screens[0];
 
-  if (!selectedScreen) {
-    console.error('No screen capture devices found.');
+    if (!selectedScreen) {
+      console.error('No screen capture devices found.');
+      process.exit(1);
+    }
+    screenIndex = selectedScreen.index;
+  } catch (err) {
+    console.error('Failed to detect devices. Is FFmpeg installed?');
+    console.error(`  ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
-  screenIndex = selectedScreen.index;
-} catch (err) {
-  console.error('Failed to detect devices. Is FFmpeg installed?');
-  console.error(`  ${err instanceof Error ? err.message : String(err)}`);
-  process.exit(1);
 }
 
 // Resolve audio config
@@ -127,14 +133,14 @@ await server.listen(port);
 const capture = new Capture({
   fps,
   bitrate: opts.bitrate,
-  gopSize: fps,
+  gopSize: Math.max(2, Math.round(fps / 6)),
 });
 
-capture.on('data', (chunk) => server.pushData(chunk));
-capture.on('audio', (chunk) => server.pushAudio(chunk));
+capture.on('videoRtp', (packet) => server.pushVideoRtp(packet));
+capture.on('audioRtp', (packet) => server.pushAudioRtp(packet));
 
 capture.on('restart', () => {
-  server.resetParser();
+  server.resetConnections();
 });
 
 capture.on('log', (msg) => {
@@ -145,7 +151,7 @@ capture.on('error', (err) => {
   console.error(`  [ffmpeg] ${err.message}`);
 });
 
-capture.start(screenIndex, audioConfig);
+await capture.start(screenIndex, audioConfig);
 
 // Start tunnel
 let tunnelUrl: string | null = null;

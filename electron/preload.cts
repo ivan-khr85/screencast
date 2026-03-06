@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, desktopCapturer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   startStream: (config: Record<string, unknown>) =>
@@ -31,4 +31,15 @@ contextBridge.exposeInMainWorld('api', {
         callback(msg),
     );
   },
+
+  getScreenSources: (): Promise<Array<{ index: string; name: string; thumbnail: string }>> =>
+    desktopCapturer
+      .getSources({ types: ['screen'], thumbnailSize: { width: 320, height: 200 } })
+      .then((sources: Electron.DesktopCapturerSource[]) =>
+        sources.map((s, i) => ({
+          index: String(i),
+          name: s.name,
+          thumbnail: s.thumbnail.toDataURL(),
+        })),
+      ),
 });
