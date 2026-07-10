@@ -70,9 +70,22 @@ if (opts.listApps) {
   process.exit(0);
 }
 
-const port = parseInt(opts.port, 10);
-const fps = parseInt(opts.fps, 10);
-const maxViewers = parseInt(opts.maxViewers, 10);
+function requireInt(value: string, name: string, min: number, max: number): number {
+  const n = parseInt(value, 10);
+  if (!Number.isInteger(n) || n < min || n > max) {
+    console.error(`Invalid --${name}: "${value}" (expected integer ${min}-${max})`);
+    process.exit(1);
+  }
+  return n;
+}
+
+const port = requireInt(opts.port, 'port', 1, 65535);
+const fps = requireInt(opts.fps, 'fps', 1, 120);
+const maxViewers = requireInt(opts.maxViewers, 'max-viewers', 1, 100);
+if (!/^\d+[kKmM]?$/.test(opts.bitrate)) {
+  console.error(`Invalid --bitrate: "${opts.bitrate}" (expected e.g. 8000k)`);
+  process.exit(1);
+}
 const password = opts.password || generatePassword();
 const wantAudio = opts.audio !== false;
 const wantTunnel = opts.tunnel !== false;
@@ -124,6 +137,8 @@ if (wantAudio) {
 // Start server
 const server = new StreamServer(password, {
   port,
+  fps,
+  bitrate: opts.bitrate,
   maxViewers,
 });
 server.setHasAudio(audioConfig.mode !== 'none');
@@ -151,6 +166,11 @@ capture.on('error', (err) => {
   console.error(`  [ffmpeg] ${err.message}`);
 });
 
+capture.on('fatal', (err: Error) => {
+  console.error(`\n  Capture failed permanently: ${err.message}`);
+  shutdown();
+});
+
 await capture.start(screenIndex, audioConfig);
 
 // Start tunnel
@@ -159,6 +179,12 @@ let tunnel: Tunnel | null = null;
 
 if (wantTunnel) {
   tunnel = new Tunnel();
+  tunnel.on('error', (err: Error) => {
+    console.error(`  Tunnel error: ${err.message}`);
+  });
+  tunnel.on('close', (code: number | null) => {
+    if (code !== 0 && code !== null) console.error('  Tunnel closed unexpectedly; stream remains reachable on LAN.');
+  });
   try {
     tunnelUrl = await tunnel.start(port);
   } catch (err) {

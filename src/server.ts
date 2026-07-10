@@ -83,10 +83,10 @@ export class StreamServer {
   #viewerCountCallback?: (count: number) => void;
   #chatCallback?: (sender: string, message: string) => void;
   #chatEnabled = true;
-  #takenNames = new Set<string>();
   #hasAudio = false;
   #videoRtpCount = 0;
   #audioRtpCount = 0;
+  #authFailures = new Map<string, { count: number; resetAt: number }>();
 
   constructor(password: string, config: Partial<Config> = {}) {
     this.#config = { ...DEFAULTS, ...config };
@@ -96,12 +96,12 @@ export class StreamServer {
       this.#handleHttp(req, res);
     });
 
-    this.#wss = new WebSocketServer({ server: this.#httpServer });
+    this.#wss = new WebSocketServer({ server: this.#httpServer, maxPayload: 64 * 1024 });
     this.#wss.on("connection", (ws, req) => {
       req.socket.setNoDelay(true);
-      this.#handleConnection(ws);
+      this.#handleConnection(ws, req);
     });
-    this.#wss.on("error", () => {});
+    this.#wss.on("error", (err) => console.error('[server] wss error:', err.message));
   }
 
   setHasAudio(hasAudio: boolean): void {
@@ -186,26 +186,43 @@ export class StreamServer {
     }
     this.#viewers.clear();
     this.#viewerNames.clear();
-    this.#takenNames.clear();
     this.#notifyViewerCount();
   }
 
-  async #handleConnection(ws: WebSocket): Promise<void> {
+  async #handleConnection(ws: WebSocket, req: http.IncomingMessage): Promise<void> {
     console.log(`[server] new WS connection (viewers=${this.#viewers.size}/${this.#config.maxViewers})`);
     if (this.#viewers.size >= this.#config.maxViewers) {
       ws.close(4005, "Max viewers reached");
       return;
     }
 
+    // Per-IP brute-force throttle: 10 failed auths per 60s window
+    const ip = req.socket.remoteAddress ?? 'unknown';
+    const failures = this.#authFailures.get(ip);
+    if (failures && Date.now() >= failures.resetAt) this.#authFailures.delete(ip);
+    else if (failures && failures.count >= 10) {
+      ws.close(4008, "Too many attempts");
+      return;
+    }
+
     try {
       await this.#authenticate(ws);
+      this.#authFailures.delete(ip);
     } catch {
       console.log('[server] authentication failed');
+      const entry = this.#authFailures.get(ip);
+      if (entry && Date.now() < entry.resetAt) entry.count++;
+      else this.#authFailures.set(ip, { count: 1, resetAt: Date.now() + 60_000 });
       return;
     }
     console.log('[server] viewer authenticated');
 
-    // Viewer is authenticated — wait for WebRTC signaling messages
+    // Viewer is authenticated — wait for WebRTC signaling messages.
+    // webrtcSetupStarted (not #viewers.has) blocks repeated webrtc_ready —
+    // the map entry only appears after async ICE gathering, so a spammed
+    // message would otherwise create parallel peer connections.
+    let webrtcSetupStarted = false;
+    let chatTimestamps: number[] = [];
     ws.on("message", async (raw) => {
       let str: string;
       if (typeof raw === "string") {
@@ -216,6 +233,8 @@ export class StreamServer {
       try {
         const msg = JSON.parse(str);
         if (msg.type === "webrtc_ready") {
+          if (webrtcSetupStarted) return;
+          webrtcSetupStarted = true;
           this.#setupPeerConnection(ws).catch((err) => {
             console.error("[webrtc] setup error:", err);
             ws.close(4011, "WebRTC setup failed");
@@ -252,10 +271,7 @@ export class StreamServer {
               return;
             }
           }
-          const oldName = this.#viewerNames.get(ws);
-          if (oldName) this.#takenNames.delete(oldName.toLowerCase());
           this.#viewerNames.set(ws, name);
-          this.#takenNames.add(lower);
           ws.send(JSON.stringify({ type: "name_result", success: true, name }));
         } else if (msg.type === "chat" && typeof msg.message === "string") {
           if (!this.#chatEnabled) return;
@@ -263,6 +279,11 @@ export class StreamServer {
           if (!sender) return;
           const text = msg.message.trim().slice(0, 500);
           if (!text) return;
+          // Rate limit: max 5 messages per 5s per viewer
+          const now = Date.now();
+          chatTimestamps = chatTimestamps.filter((t) => now - t < 5000);
+          if (chatTimestamps.length >= 5) return;
+          chatTimestamps.push(now);
           this.#broadcastChat(sender, text);
           this.#chatCallback?.(sender, text);
         }
@@ -276,8 +297,6 @@ export class StreamServer {
         viewer.audioTrack?.stop();
         viewer.pc.close();
       }
-      const name = this.#viewerNames.get(ws);
-      if (name) this.#takenNames.delete(name.toLowerCase());
       this.#viewers.delete(ws);
       this.#viewerNames.delete(ws);
       this.#notifyViewerCount();
@@ -358,7 +377,7 @@ export class StreamServer {
     // until first SPS so the browser always starts on a clean I-frame boundary)
     const viewer: ViewerConnection = { ws, pc, videoTrack, audioTrack, ready: false, waitingForKeyframe: true };
 
-    // Timeout: disconnect if DTLS+ICE don't complete within 15s
+    // Timeout: disconnect if DTLS+ICE don't complete within 35s
     const connectionTimeout = setTimeout(() => {
       if (!viewer.ready) {
         console.warn('[webrtc] connection timeout — DTLS/ICE did not complete within 35s');
@@ -394,6 +413,17 @@ export class StreamServer {
         }
       }
     });
+
+    // Re-check the cap: the connect-time check races with other connections
+    // finishing setup while this one awaited ICE gathering.
+    if (this.#viewers.size >= this.#config.maxViewers) {
+      clearTimeout(connectionTimeout);
+      videoTrack.stop();
+      audioTrack?.stop();
+      pc.close();
+      ws.close(4005, "Max viewers reached");
+      return;
+    }
 
     this.#viewers.set(ws, viewer);
     this.#notifyViewerCount();
@@ -456,6 +486,7 @@ export class StreamServer {
       this.#httpServer.once("error", reject);
       this.#httpServer.listen(port, () => {
         this.#httpServer.removeListener("error", reject);
+        this.#httpServer.on("error", (err) => console.error('[server] http error:', err.message));
         resolve();
       });
     });

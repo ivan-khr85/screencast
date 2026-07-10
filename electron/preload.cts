@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer, desktopCapturer } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   startStream: (config: Record<string, unknown>) =>
@@ -32,14 +32,8 @@ contextBridge.exposeInMainWorld('api', {
     );
   },
 
+  // desktopCapturer isn't available in a sandboxed preload — the main
+  // process enumerates sources via the screen:get-sources handler.
   getScreenSources: (): Promise<Array<{ index: string; name: string; thumbnail: string }>> =>
-    desktopCapturer
-      .getSources({ types: ['screen'], thumbnailSize: { width: 320, height: 200 } })
-      .then((sources: Electron.DesktopCapturerSource[]) =>
-        sources.map((s, i) => ({
-          index: String(i),
-          name: s.name,
-          thumbnail: s.thumbnail.toDataURL(),
-        })),
-      ),
+    ipcRenderer.invoke('screen:get-sources'),
 });

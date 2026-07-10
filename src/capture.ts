@@ -84,11 +84,27 @@ function bindUdpSocket(): Promise<{ socket: dgram.Socket; port: number }> {
     const socket = dgram.createSocket('udp4');
     socket.on('error', reject);
     socket.bind(0, '127.0.0.1', () => {
+      socket.removeListener('error', reject);
+      socket.on('error', (err) => console.error('[capture] udp socket error:', err.message));
       const addr = socket.address();
       resolve({ socket, port: addr.port });
     });
   });
 }
+
+// SIGTERM first; SIGKILL after 3s if the process ignores it.
+function killWithEscalation(proc: ChildProcess): void {
+  if (proc.exitCode !== null) return;
+  proc.kill('SIGTERM');
+  const timer = setTimeout(() => {
+    if (proc.exitCode === null) proc.kill('SIGKILL');
+  }, 3000);
+  timer.unref();
+  proc.once('close', () => clearTimeout(timer));
+}
+
+// Give up restarting a pipeline after this many attempts without a successful packet.
+const MAX_RESTART_ATTEMPTS = 6;
 
 export class Capture extends EventEmitter {
   #process: ChildProcess | null = null;
@@ -98,6 +114,8 @@ export class Capture extends EventEmitter {
   #videoSocket: dgram.Socket | null = null;
   #audioSocket: dgram.Socket | null = null;
   #stopped = false;
+  #videoRestartAttempts = 0;
+  #audioRestartAttempts = 0;
   #config: Config;
 
   constructor(config: Partial<Config> = {}) {
@@ -105,8 +123,35 @@ export class Capture extends EventEmitter {
     this.#config = { ...DEFAULTS, ...config };
   }
 
+  // Exponential backoff between restarts; emits 'fatal' (video) or disables
+  // audio once MAX_RESTART_ATTEMPTS is exceeded so a permanent failure
+  // (missing permission, missing binary) doesn't respawn forever.
+  #scheduleVideoRestart(respawn: () => void, minDelay = 1000): void {
+    if (this.#videoRestartAttempts >= MAX_RESTART_ATTEMPTS) {
+      this.emit('fatal', new Error(
+        'Video capture failed repeatedly; giving up. Check Screen Recording permission and the ffmpeg installation.',
+      ));
+      return;
+    }
+    const delay = Math.max(minDelay, Math.min(1000 * 2 ** this.#videoRestartAttempts, 30000));
+    this.#videoRestartAttempts++;
+    setTimeout(respawn, delay);
+  }
+
+  #scheduleAudioRestart(respawn: () => void): void {
+    if (this.#audioRestartAttempts >= MAX_RESTART_ATTEMPTS) {
+      this.emit('log', 'WARNING: Audio pipeline failed repeatedly; audio disabled. Video continues.');
+      return;
+    }
+    const delay = Math.min(1000 * 2 ** this.#audioRestartAttempts, 30000);
+    this.#audioRestartAttempts++;
+    setTimeout(respawn, delay);
+  }
+
   async start(screenIndex: string, audio: AudioConfig): Promise<void> {
     this.#stopped = false;
+    this.#videoRestartAttempts = 0;
+    this.#audioRestartAttempts = 0;
     console.log(`[capture] start: screenIndex=${screenIndex} audio.mode=${audio.mode} useSck=${useSck()} osRelease=${os.release()}`);
     await this.#spawnVideo(screenIndex);
     if (audio.mode !== 'none') {
@@ -187,6 +232,7 @@ export class Capture extends EventEmitter {
       if (!gotData) {
         gotData = true;
         clearTimeout(noDataTimer);
+        this.#videoRestartAttempts = 0;
         this.emit('log', 'First video RTP packet received');
       }
     };
@@ -226,7 +272,9 @@ export class Capture extends EventEmitter {
       this.emit('log', `FFmpeg exited with code ${code}, restarting...`);
       this.#closeVideoSocket();
       this.emit('restart');
-      setTimeout(() => this.#spawnVideo(screenIndex), 1000);
+      this.#scheduleVideoRestart(() => {
+        this.#spawnVideo(screenIndex).catch((err: Error) => this.emit('error', err));
+      });
     });
 
     proc.on('error', (err: Error) => {
@@ -287,7 +335,10 @@ export class Capture extends EventEmitter {
       if (scVideo.exitCode === null) scVideo.kill();
       this.#closeVideoSocket();
       this.emit('log', `sc-video startup failed (${(err as Error).message}), retrying...`);
-      setTimeout(() => this.#spawnVideoFallback(screenIndex), 2500);
+      // 2.5s minimum so a simultaneous audio SCK startup can settle first
+      this.#scheduleVideoRestart(() => {
+        this.#spawnVideoFallback(screenIndex).catch((e: Error) => this.emit('error', e));
+      }, 2500);
       return;
     }
 
@@ -338,6 +389,7 @@ export class Capture extends EventEmitter {
     this.#videoEncoder = encoder;
 
     scVideo.stdout!.pipe(encoder.stdin!);
+    scVideo.stdout!.on('error', () => {});
     encoder.stdin!.on('error', () => {});
 
     socket.on('message', (msg: Buffer) => { this.emit('videoRtp', msg); });
@@ -352,6 +404,7 @@ export class Capture extends EventEmitter {
       if (!gotData) {
         gotData = true;
         clearTimeout(noDataTimer);
+        this.#videoRestartAttempts = 0;
         console.log('[capture] #spawnVideoFallback: first RTP packet received!');
         this.emit('log', 'First video RTP packet received');
       }
@@ -363,21 +416,25 @@ export class Capture extends EventEmitter {
     });
     encoder.on('error', (err: Error) => { this.emit('error', err); });
 
+    // Both children share this restart; when one dies we kill the other, whose
+    // own 'close' then fires — the flag makes sure only one restart is scheduled.
+    let restarted = false;
     const restart = (source: string, code: number | null) => {
       clearTimeout(noDataTimer);
-      if (this.#stopped) return;
+      if (restarted || this.#stopped) return;
+      restarted = true;
       this.emit('log', `[${source}] Exited with code ${code}, restarting...`);
-      if (this.#process) { this.#process.kill(); this.#process = null; }
+      if (this.#process) { killWithEscalation(this.#process); this.#process = null; }
       this.#killVideoEncoder();
       this.#closeVideoSocket();
       this.emit('restart');
-      setTimeout(() => this.#spawnVideoFallback(screenIndex), 1000);
+      this.#scheduleVideoRestart(() => {
+        this.#spawnVideoFallback(screenIndex).catch((err: Error) => this.emit('error', err));
+      });
     };
 
     scVideo.on('close', (code) => restart('sc-video', code));
-    encoder.on('close', (code) => {
-      if (scVideo.exitCode === null && !scVideo.killed) restart('ffmpeg-enc', code);
-    });
+    encoder.on('close', (code) => restart('ffmpeg-enc', code));
   }
 
   async #spawnVideoWindows(screenIndex: string): Promise<void> {
@@ -463,6 +520,7 @@ export class Capture extends EventEmitter {
       if (!gotData) {
         gotData = true;
         clearTimeout(noDataTimer);
+        this.#videoRestartAttempts = 0;
         this.emit('log', 'First video RTP packet received');
       }
     });
@@ -478,7 +536,9 @@ export class Capture extends EventEmitter {
       this.emit('log', `FFmpeg exited with code ${code}, restarting...`);
       this.#closeVideoSocket();
       this.emit('restart');
-      setTimeout(() => this.#spawnVideo(screenIndex), 1000);
+      this.#scheduleVideoRestart(() => {
+        this.#spawnVideo(screenIndex).catch((err: Error) => this.emit('error', err));
+      });
     });
 
     proc.on('error', (err: Error) => { this.emit('error', err); });
@@ -534,20 +594,27 @@ export class Capture extends EventEmitter {
     const recordAudioTo = process.env.SCREENCAST_RECORD_AUDIO;
     if (recordAudioTo) {
       const fileStream = fs.createWriteStream(recordAudioTo);
+      fileStream.on('error', (err: Error) => this.emit('log', `[sc-audio] record file error: ${err.message}`));
+      let warnedBackpressure = false;
       this.emit('log', `[sc-audio] Recording raw PCM to ${recordAudioTo} (play with: ffplay -f f32le -ar 48000 -ac 2 ${recordAudioTo})`);
       scAudio.stdout!.on('data', (chunk: Buffer) => {
         encoder.stdin!.write(chunk);
-        fileStream.write(chunk);
+        if (!fileStream.write(chunk) && !warnedBackpressure) {
+          warnedBackpressure = true;
+          this.emit('log', '[sc-audio] record file backpressure — disk is slower than capture');
+        }
       });
       scAudio.stdout!.on('end', () => fileStream.end());
     } else {
       scAudio.stdout!.pipe(encoder.stdin!);
     }
+    scAudio.stdout!.on('error', () => {});
 
     // Forward RTP packets from the UDP socket
     socket.on('message', (msg: Buffer) => {
       this.emit('audioRtp', msg);
     });
+    socket.once('message', () => { this.#audioRestartAttempts = 0; });
 
     // Logging
     scAudio.stderr!.on('data', (data: Buffer) => {
@@ -571,20 +638,24 @@ export class Capture extends EventEmitter {
     // Handle pipe errors
     encoder.stdin!.on('error', () => {});
 
-    // Restart logic: if either process dies, kill the other and restart both
+    // Restart logic: if either process dies, kill the other and restart both.
+    // The flag stops the killed peer's own 'close' from scheduling a second restart.
+    let restarted = false;
     const restartAudio = (source: string, code: number | null) => {
-      if (this.#stopped) return;
+      if (restarted || this.#stopped) return;
+      restarted = true;
       this.emit('log', `[${source}] Exited with code ${code}, restarting audio pipeline...`);
       this.#killAudioPipeline();
-      setTimeout(() => this.#spawnAudio(audio), 1000);
+      // Force viewers to renegotiate — the new encoder has a new SSRC and
+      // existing peer connections would render silence otherwise.
+      this.emit('restart');
+      this.#scheduleAudioRestart(() => {
+        this.#spawnAudio(audio).catch((err: Error) => this.emit('log', `[audio] respawn error: ${err.message}`));
+      });
     };
 
     scAudio.on('close', (code) => restartAudio('sc-audio', code));
-    encoder.on('close', (code) => {
-      if (scAudio.exitCode === null && !scAudio.killed) {
-        restartAudio('opus', code);
-      }
-    });
+    encoder.on('close', (code) => restartAudio('opus', code));
   }
 
   async #spawnAudioWindows(audio: AudioConfig): Promise<void> {
@@ -614,6 +685,7 @@ export class Capture extends EventEmitter {
     this.#audioProcess = proc;
 
     socket.on('message', (msg: Buffer) => { this.emit('audioRtp', msg); });
+    socket.once('message', () => { this.#audioRestartAttempts = 0; });
 
     proc.stderr!.on('data', (data: Buffer) => {
       const msg = data.toString().trim();
@@ -628,7 +700,10 @@ export class Capture extends EventEmitter {
       if (this.#stopped) return;
       this.emit('log', `[wasapi] Exited with code ${code}, restarting audio...`);
       this.#killAudioPipeline();
-      setTimeout(() => this.#spawnAudio(audio), 1000);
+      this.emit('restart');
+      this.#scheduleAudioRestart(() => {
+        this.#spawnAudio(audio).catch((err: Error) => this.emit('log', `[audio] respawn error: ${err.message}`));
+      });
     });
   }
 
@@ -641,18 +716,18 @@ export class Capture extends EventEmitter {
 
   #killVideoEncoder(): void {
     if (this.#videoEncoder) {
-      this.#videoEncoder.kill('SIGTERM');
+      killWithEscalation(this.#videoEncoder);
       this.#videoEncoder = null;
     }
   }
 
   #killAudioPipeline(): void {
     if (this.#audioEncoder) {
-      this.#audioEncoder.kill('SIGTERM');
+      killWithEscalation(this.#audioEncoder);
       this.#audioEncoder = null;
     }
     if (this.#audioProcess) {
-      this.#audioProcess.kill('SIGTERM');
+      killWithEscalation(this.#audioProcess);
       this.#audioProcess = null;
     }
     if (this.#audioSocket) {
@@ -667,7 +742,7 @@ export class Capture extends EventEmitter {
     this.#killVideoEncoder();
     this.#closeVideoSocket();
     if (this.#process) {
-      this.#process.kill('SIGTERM');
+      killWithEscalation(this.#process);
       this.#process = null;
     }
   }

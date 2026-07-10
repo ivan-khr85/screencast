@@ -6,6 +6,14 @@ export function generatePassword(length = DEFAULTS.passwordLength): string {
   return crypto.randomBytes(length).toString('hex');
 }
 
+// Constant-time comparison — hashing both sides first handles length
+// mismatch without leaking anything via timing.
+function passwordsMatch(candidate: unknown, password: string): boolean {
+  const a = crypto.createHash('sha256').update(String(candidate ?? '')).digest();
+  const b = crypto.createHash('sha256').update(password).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
 export function createAuthHandler(password: string, { timeout = DEFAULTS.authTimeout } = {}) {
   return function authenticateSocket(ws: WebSocket): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -18,7 +26,7 @@ export function createAuthHandler(password: string, { timeout = DEFAULTS.authTim
         clearTimeout(timer);
         try {
           const msg = JSON.parse(data.toString());
-          if (msg.type === 'auth' && msg.password === password) {
+          if (msg.type === 'auth' && passwordsMatch(msg.password, password)) {
             ws.send(JSON.stringify({ type: 'auth', success: true }));
             resolve();
           } else {

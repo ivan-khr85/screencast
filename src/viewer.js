@@ -14,6 +14,7 @@
   let ws = null;
   let pc = null;
   let reconnectAttempt = 0;
+  let reconnectTimer = null;
   let password = '';
   let authenticated = false;
   let streamInfo = { fps: null, bitrate: null, viewers: null };
@@ -52,8 +53,9 @@
   let unreadCount = 0;
   let chatEnabled = false;
   let myName = null;
+  let savedName = null; // survives reconnects — re-sent after re-auth
 
-  window.toggleChat = function() {
+  function toggleChat() {
     chatOpen = !chatOpen;
     chatPanel.classList.toggle('open', chatOpen);
     if (chatOpen) {
@@ -62,21 +64,24 @@
       if (myName) chatInput.focus();
       else chatNameInput.focus();
     }
-  };
+  }
+  chatToggle?.addEventListener('click', toggleChat);
 
-  window.setName = function() {
+  function setName() {
     const name = chatNameInput.value.trim();
     if (!name || !ws || ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify({ type: 'set_name', name: name }));
-  };
+  }
+  document.getElementById('chat-name-btn')?.addEventListener('click', setName);
 
   chatNameInput?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); window.setName(); }
+    if (e.key === 'Enter') { e.preventDefault(); setName(); }
   });
 
   function handleNameResult(msg) {
     if (msg.success) {
       myName = msg.name;
+      savedName = msg.name;
       chatNameRow.style.display = 'none';
       chatNameError.style.display = 'none';
       chatInputRow.style.display = 'flex';
@@ -100,16 +105,17 @@
     }
   }
 
-  window.sendChat = function() {
+  function sendChat() {
     const text = chatInput.value.trim();
     if (!text || !myName || !ws || ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify({ type: 'chat', message: text }));
     chatInput.value = '';
     chatInput.focus();
-  };
+  }
+  document.getElementById('chat-send')?.addEventListener('click', sendChat);
 
   chatInput?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); window.sendChat(); }
+    if (e.key === 'Enter') { e.preventDefault(); sendChat(); }
   });
 
   // Drag handle to resize chat panel height/width
@@ -190,26 +196,35 @@
       return;
     }
 
+    // [value, suffix] pairs — rendered via textContent, never innerHTML;
+    // fps/bitrate/viewers come from the server and must not become markup.
     const parts = [];
 
     if (video.videoWidth && video.videoHeight) {
-      parts.push(`<span>${video.videoWidth}x${video.videoHeight}</span>`);
+      parts.push([`${video.videoWidth}x${video.videoHeight}`, '']);
     }
 
     if (streamInfo.fps) {
-      parts.push(`<span>${streamInfo.fps}</span> fps`);
+      parts.push([String(streamInfo.fps), ' fps']);
     }
 
     if (streamInfo.bitrate) {
-      parts.push(`<span>${streamInfo.bitrate}bps</span>`);
+      parts.push([`${streamInfo.bitrate}bps`, '']);
     }
 
     if (streamInfo.viewers != null) {
-      parts.push(`<span>${streamInfo.viewers}</span> viewer${streamInfo.viewers !== 1 ? 's' : ''}`);
+      parts.push([String(streamInfo.viewers), ` viewer${streamInfo.viewers !== 1 ? 's' : ''}`]);
     }
 
     if (parts.length > 0) {
-      statsEl.innerHTML = parts.join(' &middot; ');
+      statsEl.textContent = '';
+      parts.forEach(([value, suffix], i) => {
+        if (i > 0) statsEl.appendChild(document.createTextNode(' · '));
+        const span = document.createElement('span');
+        span.textContent = value;
+        statsEl.appendChild(span);
+        if (suffix) statsEl.appendChild(document.createTextNode(suffix));
+      });
       statsEl.style.display = 'block';
     }
   }
@@ -251,6 +266,10 @@
   }
 
   function connect() {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
     if (ws) {
       ws.onclose = null;
       ws.close();
@@ -264,6 +283,7 @@
     authenticated = false;
     hasAudio = false;
     myName = null;
+    streamInfo = { fps: null, bitrate: null, viewers: null };
     chatNameRow.style.display = 'flex';
     chatInputRow.style.display = 'none';
     chatNameError.style.display = 'none';
@@ -320,6 +340,9 @@
         setTimeout(() => setStatus('', ''), 2000);
         // Tell server we're ready for WebRTC
         ws.send(JSON.stringify({ type: 'webrtc_ready' }));
+        // Restore the chat name after a reconnect so the user
+        // doesn't have to re-join mid-session
+        if (savedName) ws.send(JSON.stringify({ type: 'set_name', name: savedName }));
       } else {
         showAuthError('Wrong password');
       }
@@ -344,15 +367,15 @@
       if (msg.type === 'webrtc_offer') {
         handleWebRTCOffer(msg.sdp, msg.iceServers);
       } else if (msg.type === 'stream_info') {
-        streamInfo.fps = msg.fps || null;
-        streamInfo.bitrate = msg.bitrate || null;
+        streamInfo.fps = Number(msg.fps) || null;
+        streamInfo.bitrate = typeof msg.bitrate === 'string' || typeof msg.bitrate === 'number' ? String(msg.bitrate) : null;
         if (msg.hasAudio) {
           hasAudio = true;
           muteToggle.style.display = 'flex';
           updateMuteIcon();
         }
       } else if (msg.type === 'viewer_count') {
-        streamInfo.viewers = msg.count;
+        streamInfo.viewers = Number.isFinite(Number(msg.count)) ? Number(msg.count) : null;
       } else if (msg.type === 'chat' && msg.sender && msg.message) {
         addChatMessage(msg.sender, msg.message);
       } else if (msg.type === 'chat_enabled') {
@@ -371,21 +394,22 @@
     });
     pc = localPc;
 
+    // One stream we own — tracks attach in whatever order they arrive, so
+    // audio isn't dropped when its ontrack fires before the video track's.
+    const remoteStream = new MediaStream();
+
     localPc.ontrack = (event) => {
       console.log('[viewer] ontrack:', event.track.kind, 'streams:', event.streams.length);
-      if (event.track.kind === 'video') {
+      if (event.track.kind === 'video' && event.receiver && 'playoutDelayHint' in event.receiver) {
         // Minimize browser jitter buffer — on a local network there is no packet
         // reordering, so Chrome's default 200-500ms video buffer is pure latency.
-        if (event.receiver && 'playoutDelayHint' in event.receiver) {
-          event.receiver.playoutDelayHint = 0;
-        }
-        if (!video.srcObject) {
-          video.srcObject = event.streams[0] || new MediaStream([event.track]);
-          video.muted = isMuted;
-          video.play().catch((err) => { if (err.name !== 'AbortError') console.warn('[viewer] video.play() rejected:', err); });
-        }
-      } else if (event.track.kind === 'audio' && video.srcObject) {
-        video.srcObject.addTrack(event.track);
+        event.receiver.playoutDelayHint = 0;
+      }
+      remoteStream.addTrack(event.track);
+      if (video.srcObject !== remoteStream) {
+        video.srcObject = remoteStream;
+        video.muted = isMuted;
+        video.play().catch((err) => { if (err.name !== 'AbortError') console.warn('[viewer] video.play() rejected:', err); });
       }
     };
 
@@ -425,18 +449,20 @@
         if (localPc.iceGatheringState === 'complete') {
           resolve();
         } else {
-          const timeout = setTimeout(() => {
-            console.warn('[viewer] ICE gathering timed out after 5s, sending partial answer');
-            resolve();
-          }, 5000);
-          localPc.addEventListener('icegatheringstatechange', function onState() {
+          const onState = () => {
             if (localPc.iceGatheringState === 'complete') {
               clearTimeout(timeout);
               localPc.removeEventListener('icegatheringstatechange', onState);
               console.log(`[viewer] ICE gathering complete in ${Date.now() - iceGatherStart}ms`);
               resolve();
             }
-          });
+          };
+          const timeout = setTimeout(() => {
+            localPc.removeEventListener('icegatheringstatechange', onState);
+            console.warn('[viewer] ICE gathering timed out after 5s, sending partial answer');
+            resolve();
+          }, 5000);
+          localPc.addEventListener('icegatheringstatechange', onState);
         }
       });
 
@@ -457,21 +483,23 @@
     iconUnmuted.style.display = isMuted ? 'none' : 'block';
   }
 
-  window.toggleMute = function() {
+  function toggleMute() {
     isMuted = !isMuted;
     video.muted = isMuted;
     updateMuteIcon();
-  };
-
-  video.addEventListener('click', () => {
-    isMuted = !isMuted;
-    video.muted = isMuted;
-    updateMuteIcon();
-  });
+  }
+  muteToggle.addEventListener('click', toggleMute);
+  video.addEventListener('click', toggleMute);
 
   function scheduleReconnect() {
+    // Both ws.onclose and ICE-failure call this — one pending timer only,
+    // or reconnects double up and the backoff index drifts.
+    if (reconnectTimer) return;
     const delay = RECONNECT_DELAYS[Math.min(reconnectAttempt, RECONNECT_DELAYS.length - 1)];
     reconnectAttempt++;
-    setTimeout(() => connect(), delay);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, delay);
   }
 })();

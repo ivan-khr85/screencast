@@ -17,11 +17,22 @@ export class Tunnel extends EventEmitter {
 
       const urlRegex = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
 
+      // Timeout after 30s
+      const timer = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          proc.kill('SIGTERM');
+          if (this.#process === proc) this.#process = null;
+          reject(new Error('Timed out waiting for cloudflared tunnel URL'));
+        }
+      }, 30000);
+
       const handleOutput = (data: Buffer): void => {
         const text = data.toString();
         const match = text.match(urlRegex);
         if (match && !resolved) {
           resolved = true;
+          clearTimeout(timer);
           resolve(match[0]);
         }
       };
@@ -32,26 +43,21 @@ export class Tunnel extends EventEmitter {
       proc.on('error', (err: Error) => {
         if (!resolved) {
           resolved = true;
+          clearTimeout(timer);
           reject(new Error(`cloudflared failed to start: ${err.message}`));
         }
-        this.emit('error', err);
+        // emit('error') with no listener throws — only forward when subscribed
+        if (this.listenerCount('error') > 0) this.emit('error', err);
       });
 
       proc.on('close', (code: number | null) => {
         if (!resolved) {
           resolved = true;
+          clearTimeout(timer);
           reject(new Error(`cloudflared exited with code ${code}`));
         }
         this.emit('close', code);
       });
-
-      // Timeout after 30s
-      setTimeout(() => {
-        if (!resolved) {
-          resolved = true;
-          reject(new Error('Timed out waiting for cloudflared tunnel URL'));
-        }
-      }, 30000);
     });
   }
 

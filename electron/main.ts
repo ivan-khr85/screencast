@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  desktopCapturer,
   ipcMain,
   Tray,
   Menu,
@@ -26,7 +27,7 @@ if (process.platform === 'darwin') {
   ];
   process.env.PATH = [...extraPaths, process.env.PATH].join(':');
 }
-import { Capture, listDevices } from '../src/capture.js';
+import { Capture, listDevices, checkSckVideoSupport } from '../src/capture.js';
 import { StreamServer } from '../src/server.js';
 import { generatePassword } from '../src/auth.js';
 import { Tunnel } from '../src/tunnel.js';
@@ -37,6 +38,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // --- Readiness Check & Auto-Prepare ---
 
+type ScreenRecordingStatus = 'granted' | 'denied' | 'restricted' | 'not-determined' | 'unknown';
+
 interface ReadinessResult {
   ready: boolean;
   hasBrew: boolean;
@@ -44,7 +47,7 @@ interface ReadinessResult {
   hasScAudio: boolean;
   hasCloudflared: boolean;
   hasSckVideo: boolean;
-  screenRecording: 'granted' | 'denied' | 'unknown';
+  screenRecording: ScreenRecordingStatus;
 }
 
 function commandExists(cmd: string): Promise<boolean> {
@@ -62,20 +65,22 @@ async function checkReadiness(): Promise<ReadinessResult> {
   ]);
 
   const hasScAudio = isScreenCaptureKitAvailable();
+  const hasSckVideo = hasFFmpeg ? await checkSckVideoSupport() : false;
 
-  let screenRecording: 'granted' | 'denied' | 'unknown' = 'unknown';
+  let screenRecording: ScreenRecordingStatus = 'unknown';
   if (process.platform === 'darwin') {
-    const access = systemPreferences.getMediaAccessStatus('screen');
-    screenRecording = access === 'denied' ? 'denied' : 'granted';
+    screenRecording = systemPreferences.getMediaAccessStatus('screen') as ScreenRecordingStatus;
   }
 
+  const screenOk = process.platform !== 'darwin' || screenRecording === 'granted';
+
   return {
-    ready: hasFFmpeg && hasCloudflared && screenRecording !== 'denied',
+    ready: hasFFmpeg && hasCloudflared && screenOk,
     hasBrew,
     hasFFmpeg,
     hasScAudio,
     hasCloudflared,
-    hasSckVideo: true,
+    hasSckVideo,
     screenRecording,
   };
 }
@@ -87,13 +92,29 @@ function brewInstall(formula: string): Promise<string> {
     });
     let stdout = '';
     let stderr = '';
+    let settled = false;
+    // brew can stall on network issues — don't leave the UI awaiting forever
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      proc.kill('SIGKILL');
+      reject(new Error(`brew install ${formula} timed out after 10 minutes`));
+    }, 10 * 60 * 1000);
     proc.stdout!.on('data', (d: Buffer) => { stdout += d.toString(); });
     proc.stderr!.on('data', (d: Buffer) => { stderr += d.toString(); });
     proc.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       if (code === 0) resolve(stdout);
       else reject(new Error(`brew install ${formula} failed (exit ${code}): ${stderr}`));
     });
-    proc.on('error', reject);
+    proc.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(err);
+    });
   });
 }
 
@@ -127,7 +148,7 @@ async function autoSetup(
     }
   }
 
-  if (initial.screenRecording === 'denied') {
+  if (initial.screenRecording === 'denied' || initial.screenRecording === 'restricted') {
     sendProgress('Screen Recording permission required. Opening System Settings...');
     shell.openExternal(
       'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
@@ -249,20 +270,55 @@ function updateTrayMenu(): void {
   );
 }
 
+// Renderer input crosses a trust boundary — clamp every number so a cleared
+// field (NaN) or hostile value can't reach listen()/ffmpeg args.
+function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+  const n = typeof value === 'number' ? Math.round(value) : parseInt(String(value), 10);
+  return Number.isInteger(n) && n >= min && n <= max ? n : fallback;
+}
+
+let starting = false;
+
 async function startStream(config: StreamConfig): Promise<void> {
-  if (status.running) return;
+  // `starting` blocks re-entry during the async startup window,
+  // before status.running is set at the end of #doStartStream.
+  if (status.running || starting) return;
+  starting = true;
+  try {
+    await doStartStream(config);
+  } catch (err) {
+    // Partial failure must not leave the server bound or children running —
+    // otherwise the next start hits EADDRINUSE until the app is quit.
+    stopStream();
+    throw err;
+  } finally {
+    starting = false;
+  }
+}
+
+async function doStartStream(config: StreamConfig): Promise<void> {
   console.log('[main] startStream:', JSON.stringify(config));
+
+  config.port = clampInt(config.port, 1024, 65535, DEFAULTS.port);
+  config.fps = clampInt(config.fps, 1, 120, 30);
+  config.maxViewers = clampInt(config.maxViewers, 1, 50, DEFAULTS.maxViewers);
+  if (typeof config.bitrate !== 'string' || !/^\d+[kKmM]?$/.test(config.bitrate)) {
+    config.bitrate = DEFAULTS.bitrate;
+  }
 
   // Check screen recording permission on macOS
   if (process.platform === 'darwin') {
     const screenAccess = systemPreferences.getMediaAccessStatus('screen');
-    if (screenAccess === 'denied') {
+    if (screenAccess === 'denied' || screenAccess === 'restricted') {
       shell.openExternal(
         'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
       );
       throw new Error(
         'Screen Recording permission is required. Grant access to Screencast in System Settings, then try again.',
       );
+    }
+    if (screenAccess === 'not-determined') {
+      console.log('[main] screen recording permission not determined — macOS will prompt on first capture');
     }
   }
 
@@ -298,6 +354,20 @@ async function startStream(config: StreamConfig): Promise<void> {
   });
   server.setHasAudio(audioConfig.mode !== 'none');
   server.setChatEnabled(config.chat !== false);
+
+  // Register callbacks before listen() — a viewer connecting during startup
+  // must not go uncounted.
+  server.onViewerCountChange((count) => {
+    status.viewers = count;
+    pushStatus();
+  });
+  server.onChat((sender, message) => {
+    mainWindow?.webContents.send('stream:chat-message', { sender, message });
+    if (Notification.isSupported()) {
+      new Notification({ title: sender, body: message, silent: true }).show();
+    }
+  });
+
   await server.listen(port);
 
   capture = new Capture({
@@ -311,6 +381,13 @@ async function startStream(config: StreamConfig): Promise<void> {
   capture.on('error', (err: Error) => {
     console.error('[main] capture error:', err.message);
     status.error = `FFmpeg: ${err.message}`;
+    pushStatus();
+  });
+  capture.on('fatal', (err: Error) => {
+    console.error('[main] capture fatal:', err.message);
+    stopStream();
+    // after stopStream — it resets status.error to null
+    status.error = `Capture failed: ${err.message}`;
     pushStatus();
   });
   capture.on('log', (msg: string) => {
@@ -330,6 +407,16 @@ async function startStream(config: StreamConfig): Promise<void> {
   let url = `http://localhost:${port}`;
   if (config.tunnel) {
     tunnelInstance = new Tunnel();
+    tunnelInstance.on('error', (err: Error) => {
+      console.error('[main] tunnel error:', err.message);
+    });
+    tunnelInstance.on('close', () => {
+      // cloudflared died mid-stream — the public URL is dead, show the LAN one
+      if (status.running && status.url?.includes('trycloudflare')) {
+        status.url = `http://localhost:${port}`;
+        pushStatus();
+      }
+    });
     try {
       url = await tunnelInstance.start(port);
     } catch {
@@ -341,23 +428,11 @@ async function startStream(config: StreamConfig): Promise<void> {
     running: true,
     url,
     password,
-    viewers: 0,
+    viewers: server.viewerCount,
     maxViewers: config.maxViewers,
     hasAudio: audioConfig.mode !== 'none',
     error: null,
   };
-
-  server.onViewerCountChange((count) => {
-    status.viewers = count;
-    pushStatus();
-  });
-
-  server.onChat((sender, message) => {
-    mainWindow?.webContents.send('stream:chat-message', { sender, message });
-    if (Notification.isSupported()) {
-      new Notification({ title: sender, body: message, silent: true }).show();
-    }
-  });
 
   pushStatus();
 }
@@ -376,6 +451,7 @@ function stopStream(): void {
     url: null,
     password: null,
     viewers: 0,
+    hasAudio: false,
     error: null,
   };
   pushStatus();
@@ -418,9 +494,7 @@ function createWindow(): void {
 }
 
 function createTray(): void {
-  const iconName =
-    process.platform === 'darwin' ? 'trayTemplate.png' : 'trayTemplate.png';
-  const iconPath = path.join(getResourcesPath(), iconName);
+  const iconPath = path.join(getResourcesPath(), 'trayTemplate.png');
 
   let icon: Electron.NativeImage;
   try {
@@ -491,6 +565,20 @@ ipcMain.handle('audio:list-apps', async () => {
   }
 });
 
+// desktopCapturer only works in the main process — sandboxed preloads
+// (Electron 20+) don't get it, so the renderer asks via IPC.
+ipcMain.handle('screen:get-sources', async () => {
+  const sources = await desktopCapturer.getSources({
+    types: ['screen'],
+    thumbnailSize: { width: 320, height: 200 },
+  });
+  return sources.map((s, i) => ({
+    index: String(i),
+    name: s.name,
+    thumbnail: s.thumbnail.toDataURL(),
+  }));
+});
+
 ipcMain.handle('clipboard:copy', (_event, text: string) => {
   clipboard.writeText(text);
 });
@@ -508,15 +596,24 @@ ipcMain.handle('system:auto-setup', async (event) => {
 
 // --- App Lifecycle ---
 
-app.whenReady().then(() => {
-  createTray();
-  createWindow();
-
-  app.on('activate', () => {
-    if (!mainWindow) createWindow();
-    else mainWindow.show();
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    mainWindow?.show();
+    mainWindow?.focus();
   });
-});
+
+  app.whenReady().then(() => {
+    createTray();
+    createWindow();
+
+    app.on('activate', () => {
+      if (!mainWindow) createWindow();
+      else mainWindow.show();
+    });
+  });
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin' && !status.running) {

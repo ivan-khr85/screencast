@@ -35,7 +35,7 @@ export const DEFAULTS: Config = {
   gopSize: 10,
   maxViewers: 5,
   authTimeout: 5000,
-  passwordLength: 4, // bytes → 8 hex chars
+  passwordLength: 6, // bytes → 12 hex chars (~48 bits)
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },

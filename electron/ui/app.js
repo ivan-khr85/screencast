@@ -123,8 +123,14 @@
     }
   }
 
-  // Expose toggleStream globally for onclick
-  window.toggleStream = async function() {
+  // Empty/garbage fields parse to NaN — fall back to defaults.
+  // The main process clamps again; this just keeps the UI honest.
+  function intOr(value, fallback) {
+    const n = parseInt(value, 10);
+    return Number.isInteger(n) ? n : fallback;
+  }
+
+  async function toggleStream() {
     const btn = els.startBtn;
 
     if (streaming) {
@@ -137,11 +143,11 @@
 
       const audioMode = els.audioMode.value;
       const config = {
-        port: parseInt(document.getElementById('port').value, 10),
-        fps: parseInt(document.getElementById('fps').value, 10),
+        port: intOr(document.getElementById('port').value, 8080),
+        fps: intOr(document.getElementById('fps').value, 30),
         bitrate: document.getElementById('bitrate').value,
         password: document.getElementById('password').value,
-        maxViewers: parseInt(document.getElementById('maxViewers').value, 10),
+        maxViewers: intOr(document.getElementById('maxViewers').value, 5),
         audioMode: audioMode,
         audioAppBundleId: audioMode === 'app' ? els.audioApp.value : undefined,
         tunnel: document.getElementById('tunnel').checked,
@@ -158,13 +164,9 @@
         btn.textContent = 'Start Stream';
       }
     }
-  };
+  }
 
-  window.toggleLiveChat = function(enabled) {
-    window.api.setChat(enabled);
-  };
-
-  window.copyField = function(field, btnEl) {
+  function copyField(field, btnEl) {
     let text;
     if (field === 'url') {
       text = els.streamUrl.textContent;
@@ -179,5 +181,14 @@
     const original = btnEl.textContent;
     btnEl.textContent = 'Copied!';
     setTimeout(() => { btnEl.textContent = original; }, 1200);
-  };
+  }
+
+  // CSP blocks inline handlers — bind everything here instead.
+  els.startBtn.addEventListener('click', toggleStream);
+  document.getElementById('chat-live-toggle').addEventListener('change', function() {
+    window.api.setChat(this.checked);
+  });
+  for (const btn of document.querySelectorAll('.btn-copy[data-copy]')) {
+    btn.addEventListener('click', () => copyField(btn.dataset.copy, btn));
+  }
 })();

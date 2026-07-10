@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; media-src 'self' blob:">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Screen Stream</title>
 <link rel="stylesheet" href="/viewer.css">
@@ -25,11 +26,11 @@
 <div id="stream-stats"></div>
 <div id="error-toasts"></div>
 
-<button id="mute-toggle" onclick="toggleMute()">
+<button id="mute-toggle">
   <svg id="icon-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
   <svg id="icon-unmuted" style="display:none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
 </button>
-<button id="chat-toggle" onclick="toggleChat()">
+<button id="chat-toggle">
   <span>&#128172;</span>
   <span class="badge" id="chat-badge"></span>
 </button>
@@ -37,13 +38,13 @@
   <div id="chat-resize-handle"></div>
   <div id="chat-name-row">
     <input type="text" id="chat-name-input" placeholder="Enter your name..." maxlength="30" autocomplete="off">
-    <button id="chat-name-btn" onclick="setName()">Join</button>
+    <button id="chat-name-btn">Join</button>
   </div>
   <div id="chat-name-error"></div>
   <div id="chat-messages"></div>
   <div id="chat-input-row" style="display:none;">
     <input type="text" id="chat-input" placeholder="Send a message..." maxlength="500" autocomplete="off">
-    <button id="chat-send" onclick="sendChat()">Send</button>
+    <button id="chat-send">Send</button>
   </div>
 </div>
 
