@@ -116,6 +116,7 @@ export class Capture extends EventEmitter {
   #stopped = false;
   #videoRestartAttempts = 0;
   #audioRestartAttempts = 0;
+  #lastVideoStderr: string[] = [];
   #config: Config;
 
   constructor(config: Partial<Config> = {}) {
@@ -128,14 +129,25 @@ export class Capture extends EventEmitter {
   // (missing permission, missing binary) doesn't respawn forever.
   #scheduleVideoRestart(respawn: () => void, minDelay = 1000): void {
     if (this.#videoRestartAttempts >= MAX_RESTART_ATTEMPTS) {
+      const stderrTail = this.#lastVideoStderr.join('\n');
+      const hint = /dyld\[|library not loaded/i.test(stderrTail)
+        ? 'The ffmpeg installation is broken (missing library) — run: brew upgrade ffmpeg.'
+        : 'Check Screen Recording permission and the ffmpeg installation.';
       this.emit('fatal', new Error(
-        'Video capture failed repeatedly; giving up. Check Screen Recording permission and the ffmpeg installation.',
+        `Video capture failed repeatedly; giving up. ${hint}`
+        + (stderrTail ? `\nLast ffmpeg output:\n${stderrTail}` : ''),
       ));
       return;
     }
     const delay = Math.max(minDelay, Math.min(1000 * 2 ** this.#videoRestartAttempts, 30000));
     this.#videoRestartAttempts++;
     setTimeout(respawn, delay);
+  }
+
+  // Keep the tail of video-pipeline stderr so the 'fatal' message can say why.
+  #recordVideoStderr(line: string): void {
+    this.#lastVideoStderr.push(line.length > 300 ? `${line.slice(0, 300)}…` : line);
+    if (this.#lastVideoStderr.length > 5) this.#lastVideoStderr.shift();
   }
 
   #scheduleAudioRestart(respawn: () => void): void {
@@ -152,6 +164,7 @@ export class Capture extends EventEmitter {
     this.#stopped = false;
     this.#videoRestartAttempts = 0;
     this.#audioRestartAttempts = 0;
+    this.#lastVideoStderr = [];
     console.log(`[capture] start: screenIndex=${screenIndex} audio.mode=${audio.mode} useSck=${useSck()} osRelease=${os.release()}`);
     await this.#spawnVideo(screenIndex);
     if (audio.mode !== 'none') {
@@ -242,6 +255,7 @@ export class Capture extends EventEmitter {
     proc.stderr!.on('data', (data: Buffer) => {
       const msg = data.toString().trim();
       if (msg) {
+        this.#recordVideoStderr(msg);
         this.emit('log', msg);
         if (/unknown input format|no such input format|unrecognized input format/i.test(msg)) {
           fatalError = true;
@@ -334,6 +348,7 @@ export class Capture extends EventEmitter {
       if (this.#stopped) { if (scVideo.exitCode === null) scVideo.kill(); return; }
       if (scVideo.exitCode === null) scVideo.kill();
       this.#closeVideoSocket();
+      this.#recordVideoStderr(`sc-video startup failed: ${(err as Error).message}`);
       this.emit('log', `sc-video startup failed (${(err as Error).message}), retrying...`);
       // 2.5s minimum so a simultaneous audio SCK startup can settle first
       this.#scheduleVideoRestart(() => {
@@ -347,7 +362,10 @@ export class Capture extends EventEmitter {
     // Forward remaining stderr as log
     scVideo.stderr!.on('data', (d: Buffer) => {
       const msg = d.toString().trim();
-      if (msg) this.emit('log', `[sc-video] ${msg}`);
+      if (msg) {
+        this.#recordVideoStderr(`[sc-video] ${msg}`);
+        this.emit('log', `[sc-video] ${msg}`);
+      }
     });
 
     const videoSize = `${dims.width}x${dims.height}`;
@@ -412,7 +430,10 @@ export class Capture extends EventEmitter {
 
     encoder.stderr!.on('data', (d: Buffer) => {
       const msg = d.toString().trim();
-      if (msg) this.emit('log', `[ffmpeg-enc] ${msg}`);
+      if (msg) {
+        this.#recordVideoStderr(`[ffmpeg-enc] ${msg}`);
+        this.emit('log', `[ffmpeg-enc] ${msg}`);
+      }
     });
     encoder.on('error', (err: Error) => { this.emit('error', err); });
 
@@ -527,7 +548,10 @@ export class Capture extends EventEmitter {
 
     proc.stderr!.on('data', (data: Buffer) => {
       const msg = data.toString().trim();
-      if (msg) this.emit('log', msg);
+      if (msg) {
+        this.#recordVideoStderr(msg);
+        this.emit('log', msg);
+      }
     });
 
     proc.on('close', (code: number | null) => {

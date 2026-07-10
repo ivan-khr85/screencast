@@ -8,6 +8,7 @@ import {
   Notification,
   nativeImage,
   clipboard,
+  screen,
   systemPreferences,
   shell,
 } from 'electron';
@@ -45,6 +46,7 @@ interface ReadinessResult {
   ready: boolean;
   hasBrew: boolean;
   hasFFmpeg: boolean;
+  ffmpegBroken: boolean;
   hasScAudio: boolean;
   hasCloudflared: boolean;
   hasSckVideo: boolean;
@@ -58,12 +60,23 @@ function commandExists(cmd: string): Promise<boolean> {
   });
 }
 
+// `which` alone isn't enough for ffmpeg — a binary whose dylibs were removed
+// by a later brew upgrade still resolves on PATH but dies instantly (dyld
+// "Library not loaded"), so verify it actually runs.
+function commandRuns(cmd: string, args: string[]): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile(cmd, args, (err) => resolve(!err));
+  });
+}
+
 async function checkReadiness(): Promise<ReadinessResult> {
-  const [hasBrew, hasFFmpeg, hasCloudflared] = await Promise.all([
+  const [hasBrew, ffmpegOnPath, hasCloudflared] = await Promise.all([
     commandExists('brew'),
     commandExists('ffmpeg'),
     commandExists('cloudflared'),
   ]);
+  const hasFFmpeg = ffmpegOnPath && await commandRuns('ffmpeg', ['-version']);
+  const ffmpegBroken = ffmpegOnPath && !hasFFmpeg;
 
   const hasScAudio = isScreenCaptureKitAvailable();
   const hasSckVideo = hasFFmpeg ? await checkSckVideoSupport() : false;
@@ -79,6 +92,7 @@ async function checkReadiness(): Promise<ReadinessResult> {
     ready: hasFFmpeg && hasCloudflared && screenOk,
     hasBrew,
     hasFFmpeg,
+    ffmpegBroken,
     hasScAudio,
     hasCloudflared,
     hasSckVideo,
@@ -86,9 +100,9 @@ async function checkReadiness(): Promise<ReadinessResult> {
   };
 }
 
-function brewInstall(formula: string): Promise<string> {
+function brewCommand(subcommand: 'install' | 'upgrade', formula: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const proc = cpSpawn('brew', ['install', formula], {
+    const proc = cpSpawn('brew', [subcommand, formula], {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -99,7 +113,7 @@ function brewInstall(formula: string): Promise<string> {
       if (settled) return;
       settled = true;
       proc.kill('SIGKILL');
-      reject(new Error(`brew install ${formula} timed out after 10 minutes`));
+      reject(new Error(`brew ${subcommand} ${formula} timed out after 10 minutes`));
     }, 10 * 60 * 1000);
     proc.stdout!.on('data', (d: Buffer) => { stdout += d.toString(); });
     proc.stderr!.on('data', (d: Buffer) => { stderr += d.toString(); });
@@ -108,7 +122,7 @@ function brewInstall(formula: string): Promise<string> {
       settled = true;
       clearTimeout(timer);
       if (code === 0) resolve(stdout);
-      else reject(new Error(`brew install ${formula} failed (exit ${code}): ${stderr}`));
+      else reject(new Error(`brew ${subcommand} ${formula} failed (exit ${code}): ${stderr}`));
     });
     proc.on('error', (err) => {
       if (settled) return;
@@ -129,10 +143,18 @@ async function autoSetup(
     return initial;
   }
 
-  if (!initial.hasFFmpeg) {
+  if (initial.ffmpegBroken) {
+    sendProgress('ffmpeg is installed but broken (missing library). Upgrading...');
+    try {
+      await brewCommand('upgrade', 'ffmpeg');
+      sendProgress('ffmpeg upgraded.');
+    } catch (err) {
+      sendProgress(`Failed to upgrade ffmpeg: ${err instanceof Error ? err.message : err}`);
+    }
+  } else if (!initial.hasFFmpeg) {
     sendProgress('Installing ffmpeg...');
     try {
-      await brewInstall('ffmpeg');
+      await brewCommand('install', 'ffmpeg');
       sendProgress('ffmpeg installed.');
     } catch (err) {
       sendProgress(`Failed to install ffmpeg: ${err instanceof Error ? err.message : err}`);
@@ -142,7 +164,7 @@ async function autoSetup(
   if (!initial.hasCloudflared) {
     sendProgress('Installing cloudflared...');
     try {
-      await brewInstall('cloudflared');
+      await brewCommand('install', 'cloudflared');
       sendProgress('cloudflared installed.');
     } catch (err) {
       sendProgress(`Failed to install cloudflared: ${err instanceof Error ? err.message : err}`);
@@ -165,7 +187,7 @@ async function autoSetup(
 
 interface StreamConfig {
   port: number;
-  fps: number;
+  fps: number | 'original';
   bitrate: string;
   password: string;
   maxViewers: number;
@@ -294,6 +316,16 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
   return Number.isInteger(n) && n >= min && n <= max ? n : fallback;
 }
 
+// 'original' fps = native refresh rate of the streamed display. desktopCapturer
+// source order is assumed to match screen.getAllDisplays() (same assumption the
+// UI already makes for ffmpeg device indices); mismatches fall back to primary.
+function displayRefreshRate(screenIndex?: string): number {
+  const displays = screen.getAllDisplays();
+  const idx = parseInt(screenIndex ?? '0', 10);
+  const hz = displays[idx]?.displayFrequency || screen.getPrimaryDisplay().displayFrequency;
+  return clampInt(Math.round(hz), 1, 120, 60);
+}
+
 function parseKbits(bitrate: string): number | null {
   const m = /^(\d+)([kKmM]?)$/.exec(bitrate);
   if (!m) return null;
@@ -325,7 +357,12 @@ async function doStartStream(config: StreamConfig): Promise<void> {
   console.log('[main] startStream:', JSON.stringify(config));
 
   config.port = clampInt(config.port, 1024, 65535, DEFAULTS.port);
-  config.fps = clampInt(config.fps, 1, 120, 30);
+  if (config.fps === 'original') {
+    config.fps = displayRefreshRate(config.screenIndex);
+    console.log(`[main] fps 'original' resolved to ${config.fps}`);
+  } else {
+    config.fps = clampInt(config.fps, 1, 120, 30);
+  }
   config.maxViewers = clampInt(config.maxViewers, 1, 50, DEFAULTS.maxViewers);
   if (typeof config.bitrate !== 'string' || !/^\d+[kKmM]?$/.test(config.bitrate)) {
     config.bitrate = DEFAULTS.bitrate;
@@ -445,7 +482,7 @@ async function doStartStream(config: StreamConfig): Promise<void> {
     // Screencapturekit unavailability is expected on this system — the Swift
     // fallback handles it silently. Don't surface these as UI errors.
     if (/unknown input format|Error opening input file/i.test(msg)) return;
-    if (/error|fatal|denied|permission/i.test(msg)) {
+    if (/error|fatal|denied|permission|library not loaded|dyld\[/i.test(msg)) {
       status.error = `FFmpeg: ${msg}`;
       pushStatus();
     }

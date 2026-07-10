@@ -87,7 +87,9 @@
     try { data = JSON.parse(localStorage.getItem(SETTINGS_KEY)); } catch { return; }
     if (!data || typeof data !== 'object') return;
     if (data.port) els.port.value = data.port;
-    if (data.fps) els.fps.value = data.fps;
+    if (data.fps && [...els.fps.options].some((o) => o.value === String(data.fps))) {
+      els.fps.value = data.fps;
+    }
     if (data.maxViewers) els.maxViewers.value = data.maxViewers;
     if (typeof data.tunnel === 'boolean') els.tunnel.checked = data.tunnel;
     if (typeof data.chat === 'boolean') els.chat.checked = data.chat;
@@ -150,7 +152,7 @@
     }
 
     const rows = [
-      { label: t('ui.setup.ffmpeg'), ok: r.hasFFmpeg, state: t(r.hasFFmpeg ? 'ui.setup.installed' : 'ui.setup.missing') },
+      { label: t('ui.setup.ffmpeg'), ok: r.hasFFmpeg, state: t(r.hasFFmpeg ? 'ui.setup.installed' : r.ffmpegBroken ? 'ui.setup.broken' : 'ui.setup.missing') },
     ];
     if (screenKnown) {
       rows.push({
@@ -542,7 +544,7 @@
       const audioMode = els.audioMode.value;
       const config = {
         port: intOr(els.port.value, 8080),
-        fps: intOr(els.fps.value, 30),
+        fps: els.fps.value === 'original' ? 'original' : intOr(els.fps.value, 30),
         bitrate: bitrate,
         password: els.password.value,
         maxViewers: intOr(els.maxViewers.value, 5),
