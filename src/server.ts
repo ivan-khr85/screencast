@@ -131,7 +131,7 @@ export class StreamServer {
   #notifyViewerCount(): void {
     const count = this.#viewers.size;
     this.#viewerCountCallback?.(count);
-    const msg = JSON.stringify({ type: "viewer_count", count });
+    const msg = JSON.stringify({ type: "viewer_count", count, maxViewers: this.#config.maxViewers });
     for (const viewer of this.#viewers.values()) {
       if (viewer.ws.readyState === WebSocket.OPEN) viewer.ws.send(msg);
     }
@@ -261,13 +261,19 @@ export class StreamServer {
         } else if (msg.type === "set_name" && typeof msg.name === "string") {
           const name = msg.name.trim().slice(0, 30);
           if (!name) {
-            ws.send(JSON.stringify({ type: "name_result", success: false, error: "Name cannot be empty" }));
+            ws.send(JSON.stringify({ type: "name_result", success: false, code: "empty", error: "Name cannot be empty" }));
             return;
           }
           const lower = name.toLowerCase();
+          // "Host" is reserved for messages sent from the streamer's own UI —
+          // a viewer must not be able to impersonate it.
+          if (lower === "host") {
+            ws.send(JSON.stringify({ type: "name_result", success: false, code: "reserved", error: "Name reserved" }));
+            return;
+          }
           for (const [other, existing] of this.#viewerNames) {
             if (other !== ws && existing.toLowerCase() === lower) {
-              ws.send(JSON.stringify({ type: "name_result", success: false, error: "Name already taken" }));
+              ws.send(JSON.stringify({ type: "name_result", success: false, code: "taken", error: "Name already taken" }));
               return;
             }
           }
@@ -447,6 +453,14 @@ export class StreamServer {
     ws.send(JSON.stringify({ type: "chat_enabled", enabled: this.#chatEnabled }));
   }
 
+  sendHostChat(message: string): boolean {
+    if (!this.#chatEnabled) return false;
+    const text = message.trim().slice(0, 500);
+    if (!text) return false;
+    this.#broadcastChat("Host", text);
+    return true;
+  }
+
   #broadcastChat(sender: string, message: string): void {
     const payload = JSON.stringify({ type: "chat", sender, message });
     for (const viewer of this.#viewers.values()) {
@@ -460,6 +474,10 @@ export class StreamServer {
       "/index.html": { file: "viewer.html", type: "text/html; charset=utf-8" },
       "/viewer.css": { file: "viewer.css", type: "text/css; charset=utf-8" },
       "/viewer.js": { file: "viewer.js", type: "application/javascript; charset=utf-8" },
+      "/i18n-dom.js": { file: "i18n-dom.js", type: "application/javascript; charset=utf-8" },
+      "/vendor/i18next.min.js": { file: "vendor/i18next.min.js", type: "application/javascript; charset=utf-8" },
+      "/locales/en.json": { file: "locales/en.json", type: "application/json; charset=utf-8" },
+      "/locales/uk.json": { file: "locales/uk.json", type: "application/json; charset=utf-8" },
     };
 
     const entry = STATIC_FILES[req.url ?? ""];
@@ -493,11 +511,17 @@ export class StreamServer {
   }
 
   close(): void {
+    // Tell viewers this is a deliberate end-of-stream, not a network drop,
+    // so they can show "stream ended" instead of reconnecting forever.
+    const ended = JSON.stringify({ type: "stream_ended" });
     for (const viewer of this.#viewers.values()) {
+      if (viewer.ws.readyState === WebSocket.OPEN) {
+        try { viewer.ws.send(ended); } catch {}
+      }
       viewer.videoTrack.stop();
       viewer.audioTrack?.stop();
       viewer.pc.close();
-      viewer.ws.close(1001, "Server shutting down");
+      viewer.ws.close(1000, "Stream ended");
     }
     this.#viewers.clear();
     this.#wss.close();

@@ -12,6 +12,7 @@ import {
   shell,
 } from 'electron';
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { execFile, spawn as cpSpawn } from 'node:child_process';
 
@@ -175,6 +176,8 @@ interface StreamConfig {
   screenIndex?: string;
 }
 
+type TunnelStatus = 'off' | 'starting' | 'up' | 'failed' | 'down';
+
 interface StreamStatus {
   running: boolean;
   url: string | null;
@@ -183,6 +186,9 @@ interface StreamStatus {
   maxViewers: number;
   hasAudio: boolean;
   error: string | null;
+  chatEnabled: boolean;
+  tunnelStatus: TunnelStatus;
+  phase: string | null;
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -199,6 +205,9 @@ let status: StreamStatus = {
   maxViewers: DEFAULTS.maxViewers,
   hasAudio: false,
   error: null,
+  chatEnabled: true,
+  tunnelStatus: 'off',
+  phase: null,
 };
 
 function pushStatus(): void {
@@ -247,6 +256,14 @@ function updateTrayMenu(): void {
       label: `Viewers: ${status.viewers}/${status.maxViewers}`,
       enabled: false,
     });
+    const tunnelLabels: Record<TunnelStatus, string> = {
+      off: 'Sharing: LAN only',
+      starting: 'Tunnel: starting…',
+      up: 'Sharing: public via Cloudflare',
+      failed: 'Tunnel failed — LAN only',
+      down: 'Tunnel down — LAN only',
+    };
+    template.push({ label: tunnelLabels[status.tunnelStatus], enabled: false });
     template.push({ type: 'separator' });
     template.push({ label: 'Stop Stream', click: () => stopStream() });
   } else {
@@ -277,6 +294,14 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
   return Number.isInteger(n) && n >= min && n <= max ? n : fallback;
 }
 
+function parseKbits(bitrate: string): number | null {
+  const m = /^(\d+)([kKmM]?)$/.exec(bitrate);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return m[2].toLowerCase() === 'm' ? n * 1000 : n;
+}
+
 let starting = false;
 
 async function startStream(config: StreamConfig): Promise<void> {
@@ -305,6 +330,23 @@ async function doStartStream(config: StreamConfig): Promise<void> {
   if (typeof config.bitrate !== 'string' || !/^\d+[kKmM]?$/.test(config.bitrate)) {
     config.bitrate = DEFAULTS.bitrate;
   }
+
+  // DEFAULTS.maxrate/bufsize are tuned for the ~100 Mbps LAN preset; for any
+  // other bitrate they would defeat the cap, so derive them from the target.
+  let maxrate = DEFAULTS.maxrate;
+  let bufsize = DEFAULTS.bufsize;
+  if (config.bitrate !== DEFAULTS.bitrate) {
+    const kbits = parseKbits(config.bitrate);
+    if (kbits) {
+      maxrate = `${Math.round(kbits * 1.5)}k`;
+      bufsize = `${kbits * 2}k`;
+    }
+  }
+
+  const setPhase = (phase: string): void => {
+    status.phase = phase;
+    pushStatus();
+  };
 
   // Check screen recording permission on macOS
   if (process.platform === 'darwin') {
@@ -346,6 +388,8 @@ async function doStartStream(config: StreamConfig): Promise<void> {
   const port = config.port;
   const gopSize = Math.max(2, Math.round(config.fps / 6));
 
+  // Phase codes — the renderer maps them to localized text
+  setPhase('server');
   server = new StreamServer(password, {
     port,
     fps: config.fps,
@@ -363,16 +407,22 @@ async function doStartStream(config: StreamConfig): Promise<void> {
   });
   server.onChat((sender, message) => {
     mainWindow?.webContents.send('stream:chat-message', { sender, message });
-    if (Notification.isSupported()) {
+    // The in-window chat panel already shows the message when the user is
+    // looking at the app — only notify when they aren't.
+    const windowInFocus = !!mainWindow && mainWindow.isVisible() && mainWindow.isFocused();
+    if (!windowInFocus && Notification.isSupported()) {
       new Notification({ title: sender, body: message, silent: true }).show();
     }
   });
 
   await server.listen(port);
 
+  setPhase('capture');
   capture = new Capture({
     fps: config.fps,
     bitrate: config.bitrate,
+    maxrate,
+    bufsize,
     gopSize,
   });
   capture.on('videoRtp', (packet) => server?.pushVideoRtp(packet));
@@ -405,7 +455,10 @@ async function doStartStream(config: StreamConfig): Promise<void> {
   console.log('[main] capture.start() returned');
 
   let url = `http://localhost:${port}`;
+  let tunnelStatus: TunnelStatus = 'off';
   if (config.tunnel) {
+    setPhase('tunnel');
+    tunnelStatus = 'starting';
     tunnelInstance = new Tunnel();
     tunnelInstance.on('error', (err: Error) => {
       console.error('[main] tunnel error:', err.message);
@@ -414,13 +467,16 @@ async function doStartStream(config: StreamConfig): Promise<void> {
       // cloudflared died mid-stream — the public URL is dead, show the LAN one
       if (status.running && status.url?.includes('trycloudflare')) {
         status.url = `http://localhost:${port}`;
+        status.tunnelStatus = 'down';
         pushStatus();
       }
     });
     try {
       url = await tunnelInstance.start(port);
+      tunnelStatus = 'up';
     } catch {
       // Tunnel failed, fall back to local URL
+      tunnelStatus = 'failed';
     }
   }
 
@@ -432,6 +488,9 @@ async function doStartStream(config: StreamConfig): Promise<void> {
     maxViewers: config.maxViewers,
     hasAudio: audioConfig.mode !== 'none',
     error: null,
+    chatEnabled: config.chat !== false,
+    tunnelStatus,
+    phase: null,
   };
 
   pushStatus();
@@ -453,6 +512,8 @@ function stopStream(): void {
     viewers: 0,
     hasAudio: false,
     error: null,
+    tunnelStatus: 'off',
+    phase: null,
   };
   pushStatus();
 }
@@ -467,7 +528,9 @@ function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 420,
     height: 580,
-    resizable: false,
+    minWidth: 420,
+    minHeight: 580,
+    resizable: true,
     maximizable: false,
     icon: path.join(getResourcesPath(), 'icon.png'),
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
@@ -542,7 +605,21 @@ ipcMain.handle('stream:stop', () => {
 ipcMain.handle('stream:get-status', () => status);
 
 ipcMain.handle('stream:set-chat', (_event, enabled: boolean) => {
-  server?.setChatEnabled(enabled);
+  server?.setChatEnabled(!!enabled);
+  status.chatEnabled = !!enabled;
+  pushStatus();
+});
+
+ipcMain.handle('stream:clear-error', () => {
+  status.error = null;
+  pushStatus();
+});
+
+ipcMain.handle('stream:send-chat', (_event, text: unknown) => {
+  if (typeof text !== 'string') return { success: false };
+  const message = text.trim().slice(0, 500);
+  if (!message || !server) return { success: false };
+  return { success: server.sendHostChat(message) };
 });
 
 ipcMain.handle('devices:list', async () => {
@@ -585,6 +662,25 @@ ipcMain.handle('clipboard:copy', (_event, text: string) => {
 
 ipcMain.handle('system:check-readiness', async () => {
   return await checkReadiness();
+});
+
+// The control panel loads over file:// where CSP blocks fetch() of local
+// JSON, so locale resources are handed over via IPC instead.
+let i18nCache: { locale: string; resources: Record<string, { translation: unknown }> } | null = null;
+ipcMain.handle('i18n:get', () => {
+  if (!i18nCache) {
+    const resources: Record<string, { translation: unknown }> = {};
+    for (const lng of ['en', 'uk'] as const) {
+      try {
+        const raw = fs.readFileSync(path.join(__dirname, 'locales', `${lng}.json`), 'utf8');
+        resources[lng] = { translation: JSON.parse(raw) };
+      } catch (err) {
+        console.error(`[main] failed to load locale ${lng}:`, err);
+      }
+    }
+    i18nCache = { locale: app.getLocale(), resources };
+  }
+  return i18nCache;
 });
 
 ipcMain.handle('system:auto-setup', async (event) => {

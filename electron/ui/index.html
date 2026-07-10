@@ -13,63 +13,96 @@
 
 <div class="container">
 
+  <!-- First-run setup (shown when dependencies are missing) -->
+  <div id="setup" class="hidden">
+    <div class="section">
+      <div class="section-title" data-i18n="ui.setup.title">Setup Required</div>
+      <ul id="setup-checklist" class="setup-checklist"></ul>
+      <div class="setup-actions">
+        <button id="setup-install" class="btn-small btn-accent">Install missing</button>
+        <button id="setup-recheck" class="btn-small" data-i18n="ui.setup.recheck">Re-check</button>
+      </div>
+      <div id="setup-log" class="setup-log hidden" aria-live="polite"></div>
+    </div>
+  </div>
+
   <!-- Settings -->
   <div id="settings">
     <div class="section">
-      <div class="section-title">Settings</div>
+      <div class="section-title" data-i18n="ui.settings.title">Settings</div>
       <div class="field">
-        <label>Display</label>
-        <select id="screenSelect">
-          <option value="0">Main Screen</option>
+        <label for="langSelect" data-i18n="common.language">Language</label>
+        <select id="langSelect">
+          <option value="en">English</option>
+          <option value="uk">Українська</option>
         </select>
       </div>
-      <img id="displayThumb" class="hidden" style="width:100%;height:72px;object-fit:cover;object-position:top center;border-radius:6px;border:1px solid #2a2a2a;display:block;margin-bottom:8px;">
       <div class="field">
-        <label>Port</label>
+        <label for="screenSelect" data-i18n="ui.settings.display">Display</label>
+        <select id="screenSelect">
+          <option value="0" data-i18n="ui.settings.mainScreen">Main Screen</option>
+        </select>
+      </div>
+      <img id="displayThumb" class="display-thumb hidden" alt="Preview of selected display" data-i18n-alt="ui.info.displayPreview">
+      <div class="field">
+        <label for="port" data-i18n="ui.settings.port">Port</label>
         <input type="number" id="port" value="8080" min="1024" max="65535">
       </div>
       <div class="field">
-        <label>FPS</label>
-        <input type="number" id="fps" value="30" min="1" max="60">
+        <label for="fps" data-i18n="ui.settings.fps">FPS</label>
+        <input type="number" id="fps" value="30" min="1" max="120">
       </div>
       <div class="field">
-        <label>Bitrate</label>
-        <input type="text" id="bitrate" value="100750k">
+        <label for="quality" data-i18n="ui.settings.quality">Quality</label>
+        <select id="quality">
+          <option value="100750k" selected data-i18n="ui.settings.qMax">Maximum (LAN)</option>
+          <option value="20000k" data-i18n="ui.settings.qHigh">High (remote)</option>
+          <option value="8000k" data-i18n="ui.settings.qMedium">Medium</option>
+          <option value="3000k" data-i18n="ui.settings.qLow">Low</option>
+          <option value="custom" data-i18n="ui.settings.qCustom">Custom&hellip;</option>
+        </select>
       </div>
-
-      <div class="field">
-        <label>Password</label>
-        <input type="text" id="password" placeholder="auto">
+      <div class="field hidden" id="bitrateField">
+        <label for="bitrate" data-i18n="ui.settings.bitrate">Bitrate</label>
+        <input type="text" id="bitrate" value="100750k" placeholder="e.g. 8000k" data-i18n-placeholder="ui.settings.bitratePh">
       </div>
       <div class="field">
-        <label>Max Viewers</label>
+        <label for="password" data-i18n="ui.settings.password">Password</label>
+        <span class="input-group">
+          <input type="text" id="password" placeholder="blank = auto" data-i18n-placeholder="ui.settings.passwordPh">
+          <button id="genPassword" class="btn-inline" aria-label="Generate password" title="Generate password" data-i18n-aria-label="ui.settings.genPassword" data-i18n-title="ui.settings.genPassword">&#8635;</button>
+        </span>
+      </div>
+      <div class="field">
+        <label for="maxViewers" data-i18n="ui.settings.maxViewers">Max Viewers</label>
         <input type="number" id="maxViewers" value="5" min="1" max="50">
       </div>
       <div class="field">
-        <label>Audio</label>
+        <label for="audioMode" data-i18n="ui.settings.audio">Audio</label>
         <select id="audioMode">
-          <option value="system" selected>System Audio</option>
-          <option value="app">App Audio</option>
-          <option value="none">No Audio</option>
+          <option value="system" selected data-i18n="ui.settings.audioSystem">System Audio</option>
+          <option value="app" data-i18n="ui.settings.audioApp">App Audio</option>
+          <option value="none" data-i18n="ui.settings.audioNone">No Audio</option>
         </select>
       </div>
       <div class="field hidden" id="audioAppField">
-        <label>App</label>
+        <label for="audioApp" data-i18n="ui.settings.app">App</label>
         <select id="audioApp">
           <option value="">Select app...</option>
         </select>
       </div>
       <div class="field">
-        <label>Public Tunnel</label>
+        <span class="field-label" id="tunnel-label" data-i18n="ui.settings.tunnel">Public Tunnel</span>
         <label class="toggle">
-          <input type="checkbox" id="tunnel" checked>
+          <input type="checkbox" id="tunnel" checked aria-labelledby="tunnel-label">
           <span class="slider"></span>
         </label>
       </div>
+      <div id="tunnel-note" class="field-note hidden" data-i18n="ui.settings.tunnelNote">Install cloudflared to enable public sharing</div>
       <div class="field">
-        <label>Chat</label>
+        <span class="field-label" id="chat-label" data-i18n="ui.chat">Chat</span>
         <label class="toggle">
-          <input type="checkbox" id="chat" checked>
+          <input type="checkbox" id="chat" checked aria-labelledby="chat-label">
           <span class="slider"></span>
         </label>
       </div>
@@ -80,49 +113,85 @@
   <button id="startBtn" class="btn btn-start">
     Start Stream
   </button>
+  <div id="start-hint" class="start-hint hidden"></div>
 
-  <div id="error" class="error hidden"></div>
+  <div id="error" class="error hidden" aria-live="polite"></div>
 
   <!-- Stream Info (shown when streaming) -->
   <div id="stream-info" class="hidden">
-    <div class="section" style="margin-top: 14px;">
-      <div class="section-title">Stream Info</div>
+    <div id="stream-warning" class="stream-warning hidden" aria-live="polite">
+      <span id="stream-warning-text"></span>
+      <button id="stream-warning-dismiss" aria-label="Dismiss warning" data-i18n-aria-label="ui.info.dismissWarning">&times;</button>
+    </div>
+
+    <div class="section section-gap">
+      <div class="section-title" data-i18n="ui.info.title">Stream Info</div>
       <div class="info-row">
-        <span class="info-label">URL</span>
+        <span class="info-label" data-i18n="ui.info.url">URL</span>
         <span id="stream-url" class="info-value"></span>
-        <button class="btn-copy" data-copy="url">Copy</button>
+        <button class="btn-copy" data-copy="url" data-i18n="common.copy">Copy</button>
       </div>
+      <div id="tunnel-badge" class="tunnel-badge hidden"></div>
       <div class="info-row">
-        <span class="info-label">Password</span>
+        <span class="info-label" data-i18n="ui.info.password">Password</span>
         <span id="stream-password" class="info-value"></span>
-        <button class="btn-copy" data-copy="password">Copy</button>
+        <button class="btn-copy" data-copy="password" data-i18n="common.copy">Copy</button>
       </div>
-      <div class="info-row" style="margin-top: 12px; justify-content: center;">
-        <button class="btn-copy" style="padding: 6px 16px; font-size: 12px; color: #4a9eff; border-color: #4a9eff44;" data-copy="link">Copy Link (auto-connect)</button>
+      <div class="info-row info-row-center">
+        <button class="btn-copy btn-copy-accent" data-copy="link" data-i18n="ui.info.copyLink">Copy Link (auto-connect)</button>
+        <button class="btn-copy" id="qr-toggle">Show QR</button>
+      </div>
+      <div id="qr-block" class="qr-block hidden">
+        <canvas id="qr-canvas" width="220" height="220" role="img" aria-label="QR code for stream link" data-i18n-aria-label="ui.info.qrAria"></canvas>
+        <label class="qr-include">
+          <input type="checkbox" id="qr-include-password" checked>
+          <span data-i18n="ui.info.qrInclude">Include password (auto-connect)</span>
+        </label>
       </div>
     </div>
 
     <div class="section">
-      <div class="viewers-display">
+      <div class="viewers-display" role="status">
         <div id="viewer-count" class="viewers-count">0 / 5</div>
-        <div class="viewers-label">Viewers</div>
+        <div class="viewers-label" data-i18n="ui.info.viewers">Viewers</div>
       </div>
-      <div class="field" style="margin-top: 10px;">
-        <label>Chat</label>
+      <div class="field field-gap">
+        <span class="field-label" id="chat-live-label" data-i18n="ui.chat">Chat</span>
         <label class="toggle">
-          <input type="checkbox" id="chat-live-toggle" checked>
+          <input type="checkbox" id="chat-live-toggle" checked aria-labelledby="chat-live-label">
           <span class="slider"></span>
         </label>
       </div>
     </div>
 
-    <div id="audio-note" class="audio-note hidden">
+    <!-- Host chat panel -->
+    <div class="section" id="chat-section">
+      <button id="chat-header" class="chat-header" aria-expanded="false">
+        <span class="chat-header-title" data-i18n="ui.chat">Chat</span>
+        <span id="chat-unread" class="chat-unread hidden">0</span>
+        <span class="chat-chevron" aria-hidden="true">&#9662;</span>
+      </button>
+      <div id="chat-body" class="hidden">
+        <div id="chat-messages" class="chat-messages" role="log" aria-live="polite"></div>
+        <div class="chat-input-row">
+          <input type="text" id="chat-input" placeholder="Message viewers..." maxlength="500" aria-label="Chat message" data-i18n-placeholder="ui.chatPanel.messagePh" data-i18n-aria-label="ui.chatPanel.messageAria">
+          <button id="chat-send" class="btn-small btn-accent" data-i18n="common.send">Send</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="audio-note" class="audio-note hidden" data-i18n="ui.info.audioNote">
       Audio capture unavailable
     </div>
   </div>
 
 </div>
 
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script src="vendor/qrcode.js"></script>
+<script src="vendor/i18next.min.js"></script>
+<script src="i18n-dom.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

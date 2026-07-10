@@ -1,15 +1,34 @@
 (function() {
   const RECONNECT_DELAYS = [1000, 2000, 4000, 8000];
+  const MAX_RECONNECT_ATTEMPTS = 10;
+  const PREFS_KEY = 'screencast:viewer';
+  const LANG_KEY = 'screencast:lang';
+  const t = (key, opts) => i18next.t(key, opts);
 
   const authScreen = document.getElementById('auth-screen');
   const playerScreen = document.getElementById('player-screen');
   const video = document.getElementById('video');
   const statusEl = document.getElementById('status');
   const authForm = document.getElementById('auth-form');
+  const authSubmit = document.getElementById('auth-submit');
   const passwordInput = document.getElementById('password-input');
   const authError = document.getElementById('auth-error');
   const statsEl = document.getElementById('stream-stats');
   const toastsEl = document.getElementById('error-toasts');
+  const loadingOverlay = document.getElementById('loading-overlay');
+  const loadingText = document.getElementById('loading-text');
+  const streamOverlay = document.getElementById('stream-overlay');
+  const overlayTitle = document.getElementById('overlay-title');
+  const overlayMessage = document.getElementById('overlay-message');
+  const overlayRetry = document.getElementById('overlay-retry');
+  const controls = document.getElementById('controls');
+  const audioControls = document.getElementById('audio-controls');
+  const volumeSlider = document.getElementById('volume-slider');
+  const statsToggle = document.getElementById('stats-toggle');
+  const pipToggle = document.getElementById('pip-toggle');
+  const fullscreenToggle = document.getElementById('fullscreen-toggle');
+  const iconFsEnter = document.getElementById('icon-fs-enter');
+  const iconFsExit = document.getElementById('icon-fs-exit');
 
   let ws = null;
   let pc = null;
@@ -17,10 +36,23 @@
   let reconnectTimer = null;
   let password = '';
   let authenticated = false;
-  let streamInfo = { fps: null, bitrate: null, viewers: null };
+  let streamInfo = { viewers: null, maxViewers: null };
+  let streamEnded = false;
 
   let isMuted = true; // Start muted (browser autoplay policy)
   let hasAudio = false;
+
+  // Persisted viewer preferences (volume + stats overlay visibility)
+  let volume = 1;
+  let statsVisible = false;
+  try {
+    const saved = JSON.parse(localStorage.getItem(PREFS_KEY)) || {};
+    if (typeof saved.volume === 'number' && saved.volume >= 0 && saved.volume <= 1) volume = saved.volume;
+    if (typeof saved.statsVisible === 'boolean') statsVisible = saved.statsVisible;
+  } catch {}
+  function savePrefs() {
+    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ volume, statsVisible })); } catch {}
+  }
 
   function logTrackStats() {
     if (!pc) return;
@@ -87,7 +119,9 @@
       chatInputRow.style.display = 'flex';
       chatInput.focus();
     } else {
-      chatNameError.textContent = msg.error || 'Name not available';
+      // The server sends an error code; the key-array fallback covers old
+      // servers (or unknown codes) via the generic message
+      chatNameError.textContent = t(['viewer.chat.nameError.' + (msg.code || 'generic'), 'viewer.chat.nameError.generic']);
       chatNameError.style.display = 'block';
       chatNameInput.focus();
       chatNameInput.select();
@@ -118,7 +152,8 @@
     if (e.key === 'Enter') { e.preventDefault(); sendChat(); }
   });
 
-  // Drag handle to resize chat panel height/width
+  // Drag handle to resize the chat panel. Pointer events cover mouse and
+  // touch in one code path; capture keeps move/up on the handle itself.
   const chatResizeHandle = document.getElementById('chat-resize-handle');
   let resizing = false;
   let resizeStartY = 0;
@@ -126,9 +161,10 @@
   let resizeStartH = 0;
   let resizeStartW = 0;
 
-  chatResizeHandle?.addEventListener('mousedown', (e) => {
+  chatResizeHandle?.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     resizing = true;
+    chatResizeHandle.setPointerCapture(e.pointerId);
     resizeStartY = e.clientY;
     resizeStartX = e.clientX;
     resizeStartH = chatPanel.offsetHeight;
@@ -136,26 +172,32 @@
     document.body.style.userSelect = 'none';
   });
 
-  document.addEventListener('mousemove', (e) => {
+  chatResizeHandle?.addEventListener('pointermove', (e) => {
     if (!resizing) return;
-    const dy = resizeStartY - e.clientY;
-    const dx = resizeStartX - e.clientX;
+    const dy = e.clientY - resizeStartY;
     const newH = Math.max(200, Math.min(window.innerHeight - 80, resizeStartH + dy));
-    const newW = Math.max(240, Math.min(window.innerWidth - 30, resizeStartW + dx));
     chatPanel.style.height = newH + 'px';
-    chatPanel.style.width = newW + 'px';
+    // On phone-sized screens the panel is a full-width bottom sheet — height only
+    if (window.innerWidth > 600) {
+      const dx = e.clientX - resizeStartX;
+      const newW = Math.max(240, Math.min(window.innerWidth - 30, resizeStartW + dx));
+      chatPanel.style.width = newW + 'px';
+    }
   });
 
-  document.addEventListener('mouseup', () => {
+  const endResize = () => {
     if (resizing) {
       resizing = false;
       document.body.style.userSelect = '';
     }
-  });
+  };
+  chatResizeHandle?.addEventListener('pointerup', endResize);
+  chatResizeHandle?.addEventListener('pointercancel', endResize);
 
   function addChatMessage(sender, text) {
     const el = document.createElement('div');
     el.className = 'chat-msg';
+    if (sender === 'Host') el.classList.add('chat-host');
     const s = document.createElement('span');
     s.className = 'chat-sender';
     s.textContent = sender;
@@ -175,45 +217,151 @@
     }
   }
 
-  function setStatus(text, cls) {
-    statusEl.textContent = text;
+  // Transient text setters take i18n keys and remember their last arguments
+  // so a language switch can re-render whatever is currently on screen.
+  let lastStatusArgs = null;
+  function setStatus(key, cls, opts) {
+    lastStatusArgs = { key, cls, opts };
+    statusEl.textContent = key ? t(key, opts) : '';
     statusEl.className = cls;
-    statusEl.style.display = text ? 'block' : 'none';
+    statusEl.style.display = key ? 'block' : 'none';
   }
 
-  function showError(msg, warn) {
+  function showError(key, warn) {
     const el = document.createElement('div');
     el.className = 'error-toast' + (warn ? ' warn' : '');
-    el.textContent = msg;
+    el.textContent = t(key);
     toastsEl.appendChild(el);
     while (toastsEl.children.length > 5) toastsEl.removeChild(toastsEl.firstChild);
     setTimeout(() => { if (el.parentNode) el.remove(); }, 6000);
   }
 
+  // Loading / buffering overlay
+  let lastLoadingKey = null;
+  function showLoading(key) {
+    lastLoadingKey = key;
+    loadingText.textContent = t(key);
+    loadingOverlay.classList.add('visible');
+  }
+  function hideLoading() {
+    loadingOverlay.classList.remove('visible');
+  }
+
+  video.addEventListener('playing', hideLoading);
+  video.addEventListener('loadeddata', hideLoading);
+  video.addEventListener('waiting', () => {
+    if (authenticated && !streamEnded) showLoading('viewer.loading.buffering');
+  });
+  video.addEventListener('stalled', () => {
+    if (authenticated && !streamEnded) showLoading('viewer.loading.buffering');
+  });
+
+  // Terminal overlay (stream ended / gave up reconnecting)
+  let lastOverlayArgs = null;
+  function showOverlay(titleKey, messageKey) {
+    lastOverlayArgs = { titleKey, messageKey };
+    overlayTitle.textContent = t(titleKey);
+    overlayMessage.textContent = t(messageKey);
+    streamOverlay.classList.add('visible');
+    hideLoading();
+    setStatus('', '');
+  }
+  function hideOverlay() {
+    streamOverlay.classList.remove('visible');
+  }
+  overlayRetry.addEventListener('click', () => {
+    hideOverlay();
+    streamEnded = false;
+    reconnectAttempt = 0;
+    showLoading('viewer.loading.connecting');
+    connect();
+  });
+
+  // Measured playback stats (real fps/bitrate/loss from WebRTC, not the
+  // configured values the server advertises)
+  let lastRtp = null;
+  let measured = { fps: null, kbps: null, lossPct: null };
+
+  function resetMeasuredStats() {
+    lastRtp = null;
+    measured = { fps: null, kbps: null, lossPct: null };
+  }
+
+  setInterval(() => {
+    if (!pc || !statsVisible) return;
+    pc.getStats().then((stats) => {
+      let bytes = 0;
+      let frames = null;
+      let lost = 0;
+      let received = 0;
+      let found = false;
+      stats.forEach((report) => {
+        if (report.type === 'inbound-rtp') {
+          found = true;
+          bytes += report.bytesReceived || 0;
+          lost += report.packetsLost || 0;
+          received += report.packetsReceived || 0;
+          if (report.kind === 'video' && typeof report.framesDecoded === 'number') {
+            frames = report.framesDecoded;
+          }
+        }
+      });
+      if (!found) return;
+      const now = performance.now();
+      if (lastRtp) {
+        const dt = (now - lastRtp.ts) / 1000;
+        if (dt > 0) {
+          measured.kbps = Math.max(0, Math.round(((bytes - lastRtp.bytes) * 8) / dt / 1000));
+          if (frames != null && lastRtp.frames != null) {
+            measured.fps = Math.max(0, Math.round((frames - lastRtp.frames) / dt));
+          }
+          const dLost = lost - lastRtp.lost;
+          const dRecv = received - lastRtp.received;
+          measured.lossPct = dLost > 0 && dLost + dRecv > 0
+            ? Math.round((dLost / (dLost + dRecv)) * 1000) / 10
+            : 0;
+        }
+      }
+      lastRtp = { ts: now, bytes, frames, lost, received };
+    }).catch(() => {});
+  }, 1000);
+
+  function formatBitrate(kbps) {
+    return kbps >= 1000
+      ? (kbps / 1000).toFixed(1) + ' ' + t('viewer.stats.mbps')
+      : kbps + ' ' + t('viewer.stats.kbps');
+  }
+
   function updateStats() {
-    if (!authenticated || playerScreen.style.display === 'none') {
+    if (!statsVisible || !authenticated || playerScreen.style.display === 'none') {
       statsEl.style.display = 'none';
       return;
     }
 
     // [value, suffix] pairs — rendered via textContent, never innerHTML;
-    // fps/bitrate/viewers come from the server and must not become markup.
+    // viewer counts come from the server and must not become markup.
     const parts = [];
 
     if (video.videoWidth && video.videoHeight) {
       parts.push([`${video.videoWidth}x${video.videoHeight}`, '']);
     }
 
-    if (streamInfo.fps) {
-      parts.push([String(streamInfo.fps), ' fps']);
+    if (measured.fps != null) {
+      parts.push([String(measured.fps), ' ' + t('viewer.stats.fps')]);
     }
 
-    if (streamInfo.bitrate) {
-      parts.push([`${streamInfo.bitrate}bps`, '']);
+    if (measured.kbps != null) {
+      parts.push([formatBitrate(measured.kbps), '']);
+    }
+
+    if (measured.lossPct != null && measured.lossPct > 0) {
+      parts.push([measured.lossPct + '%', ' ' + t('viewer.stats.loss')]);
     }
 
     if (streamInfo.viewers != null) {
-      parts.push([String(streamInfo.viewers), ` viewer${streamInfo.viewers !== 1 ? 's' : ''}`]);
+      const cap = streamInfo.maxViewers != null ? `/${streamInfo.maxViewers}` : '';
+      // i18next picks the plural form from count — Ukrainian has four
+      parts.push([`${streamInfo.viewers}${cap}`, ' ' + t('viewer.stats.viewersSuffix', { count: streamInfo.viewers })]);
     }
 
     if (parts.length > 0) {
@@ -226,27 +374,173 @@
         if (suffix) statsEl.appendChild(document.createTextNode(suffix));
       });
       statsEl.style.display = 'block';
+    } else {
+      statsEl.style.display = 'none';
     }
   }
 
   setInterval(updateStats, 500);
+
+  function syncStatsAria() {
+    statsToggle.setAttribute('aria-label', t(statsVisible ? 'viewer.stats.hide' : 'viewer.stats.show'));
+  }
+
+  function toggleStats() {
+    statsVisible = !statsVisible;
+    statsToggle.classList.toggle('active', statsVisible);
+    syncStatsAria();
+    savePrefs();
+    updateStats();
+  }
+  statsToggle.addEventListener('click', toggleStats);
+  statsToggle.classList.toggle('active', statsVisible);
 
   function getWsUrl() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     return `${proto}//${location.host}`;
   }
 
-  // Mute toggle
+  // Mute / volume
   const muteToggle = document.getElementById('mute-toggle');
   const iconMuted = document.getElementById('icon-muted');
   const iconUnmuted = document.getElementById('icon-unmuted');
 
-  // Auto-connect if password is in the URL hash
-  const hashPassword = location.hash.slice(1);
-  if (hashPassword) {
-    password = decodeURIComponent(hashPassword);
-    history.replaceState(null, '', location.pathname);
-    connect();
+  function updateMuteIcon() {
+    iconMuted.style.display = isMuted ? 'block' : 'none';
+    iconUnmuted.style.display = isMuted ? 'none' : 'block';
+    muteToggle.setAttribute('aria-label', t(isMuted ? 'viewer.controls.unmute' : 'viewer.controls.mute'));
+  }
+
+  function applyAudio() {
+    video.muted = isMuted;
+    video.volume = volume;
+    volumeSlider.value = String(isMuted ? 0 : volume);
+    updateMuteIcon();
+  }
+
+  function toggleMute() {
+    if (!hasAudio) return;
+    isMuted = !isMuted;
+    if (!isMuted && volume === 0) volume = 0.5;
+    applyAudio();
+    savePrefs();
+  }
+  muteToggle.addEventListener('click', toggleMute);
+
+  volumeSlider.addEventListener('input', () => {
+    const v = parseFloat(volumeSlider.value);
+    if (Number.isNaN(v)) return;
+    if (v === 0) {
+      isMuted = true;
+    } else {
+      isMuted = false;
+      volume = v;
+    }
+    applyAudio();
+    savePrefs();
+  });
+
+  function adjustVolume(delta) {
+    if (!hasAudio) return;
+    volume = Math.max(0, Math.min(1, (isMuted ? 0 : volume) + delta));
+    isMuted = volume === 0;
+    applyAudio();
+    savePrefs();
+  }
+
+  // Fullscreen — on the player container so controls/chat stay visible.
+  // iPhone Safari has no element fullscreen; fall back to the native
+  // video fullscreen there (overlays won't show — platform limitation).
+  function toggleFullscreen() {
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+      return;
+    }
+    if (playerScreen.requestFullscreen) {
+      playerScreen.requestFullscreen().catch(() => {});
+    } else if (playerScreen.webkitRequestFullscreen) {
+      playerScreen.webkitRequestFullscreen();
+    } else if (video.webkitEnterFullscreen) {
+      video.webkitEnterFullscreen();
+    }
+  }
+  fullscreenToggle.addEventListener('click', toggleFullscreen);
+
+  function syncFullscreenIcon() {
+    const fs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    iconFsEnter.style.display = fs ? 'none' : 'block';
+    iconFsExit.style.display = fs ? 'block' : 'none';
+    fullscreenToggle.setAttribute('aria-label', t(fs ? 'viewer.controls.exitFullscreen' : 'viewer.controls.fullscreen'));
+  }
+  document.addEventListener('fullscreenchange', syncFullscreenIcon);
+  document.addEventListener('webkitfullscreenchange', syncFullscreenIcon);
+
+  // Picture-in-picture (hidden where unsupported — Firefox has its own UI)
+  if (!document.pictureInPictureEnabled) {
+    pipToggle.style.display = 'none';
+  } else {
+    pipToggle.addEventListener('click', async () => {
+      try {
+        if (document.pictureInPictureElement) await document.exitPictureInPicture();
+        else await video.requestPictureInPicture();
+      } catch {}
+    });
+    video.addEventListener('enterpictureinpicture', () => pipToggle.classList.add('active'));
+    video.addEventListener('leavepictureinpicture', () => pipToggle.classList.remove('active'));
+  }
+
+  // Control bar auto-hide
+  let controlsTimer = null;
+  function showControls() {
+    controls.classList.add('visible');
+    clearTimeout(controlsTimer);
+    controlsTimer = setTimeout(() => controls.classList.remove('visible'), 3000);
+  }
+  function hideControls() {
+    clearTimeout(controlsTimer);
+    controlsTimer = null;
+    controls.classList.remove('visible');
+  }
+  playerScreen.addEventListener('mousemove', showControls);
+  playerScreen.addEventListener('touchstart', showControls, { passive: true });
+  controls.addEventListener('mouseenter', () => clearTimeout(controlsTimer));
+  controls.addEventListener('mouseleave', showControls);
+
+  // Tap video: toggle the control bar. Double-tap/click: fullscreen.
+  video.addEventListener('click', () => {
+    if (controls.classList.contains('visible')) hideControls();
+    else showControls();
+  });
+  video.addEventListener('dblclick', toggleFullscreen);
+
+  // Keyboard shortcuts (skipped while typing in an input)
+  document.addEventListener('keydown', (e) => {
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+    if (!authenticated) return;
+    if (e.key === 'm' || e.key === 'M') {
+      toggleMute();
+    } else if (e.key === 'f' || e.key === 'F') {
+      toggleFullscreen();
+    } else if (e.key === 's' || e.key === 'S') {
+      toggleStats();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      adjustVolume(0.05);
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      adjustVolume(-0.05);
+    } else {
+      return;
+    }
+    showControls();
+  });
+
+  let lastAuthBusy = false;
+  function setAuthBusy(busy) {
+    lastAuthBusy = busy;
+    authSubmit.disabled = busy;
+    authSubmit.textContent = t(busy ? 'viewer.auth.connecting' : 'viewer.auth.connect');
   }
 
   authForm.addEventListener('submit', (e) => {
@@ -254,6 +548,7 @@
     password = passwordInput.value.trim();
     if (!password) return;
     authError.style.display = 'none';
+    setAuthBusy(true);
     connect();
   });
 
@@ -263,6 +558,7 @@
       pc = null;
     }
     video.srcObject = null;
+    resetMeasuredStats();
   }
 
   function connect() {
@@ -276,14 +572,14 @@
     }
 
     cleanupPeerConnection();
-    muteToggle.style.display = 'none';
+    audioControls.classList.remove('available');
 
-    setStatus('Connecting...', 'reconnecting');
+    setStatus('viewer.status.connecting', 'reconnecting');
     ws = new WebSocket(getWsUrl());
     authenticated = false;
     hasAudio = false;
     myName = null;
-    streamInfo = { fps: null, bitrate: null, viewers: null };
+    streamInfo = { viewers: null, maxViewers: null };
     chatNameRow.style.display = 'flex';
     chatInputRow.style.display = 'none';
     chatNameError.style.display = 'none';
@@ -301,30 +597,43 @@
     };
 
     ws.onclose = (e) => {
+      console.log('[viewer] ws closed, code:', e.code, e.reason);
+      if (streamEnded) {
+        cleanupPeerConnection();
+        return;
+      }
       if (e.code === 4003) {
-        showAuthError('Wrong password');
+        showAuthError('viewer.authError.wrongPassword');
         return;
       }
       if (e.code === 4005) {
-        showAuthError('Stream is full');
+        showAuthError('viewer.authError.full');
+        return;
+      }
+      if (e.code === 4008) {
+        // Reconnecting would keep tripping the throttle — stop here.
+        showAuthError('viewer.authError.throttled');
+        return;
+      }
+      if (e.code === 4001 || e.code === 4002) {
+        showAuthError('viewer.authError.connection');
         return;
       }
       if (e.code === 4010) {
-        showError('Stream is restarting...', true);
+        showError('viewer.errors.restarting', true);
       } else if (e.code === 4011) {
-        showError('WebRTC connection lost');
+        showError('viewer.errors.videoInterrupted');
       } else if (authenticated && e.code !== 1000) {
-        showError('Connection lost (code ' + e.code + ')');
+        showError('viewer.errors.lost');
       }
       cleanupPeerConnection();
       if (authenticated) {
-        setStatus('Reconnecting...', 'reconnecting');
         scheduleReconnect();
       }
     };
 
     ws.onerror = () => {
-      if (authenticated) showError('WebSocket error');
+      if (authenticated) showError('viewer.errors.problem');
     };
   }
 
@@ -334,27 +643,34 @@
       if (msg.type === 'auth' && msg.success) {
         authenticated = true;
         reconnectAttempt = 0;
+        setAuthBusy(false);
         authScreen.style.display = 'none';
         playerScreen.style.display = 'block';
-        setStatus('Connected', 'connected');
+        setStatus('viewer.status.connected', 'connected');
         setTimeout(() => setStatus('', ''), 2000);
+        showLoading('viewer.loading.waiting');
+        showControls();
         // Tell server we're ready for WebRTC
         ws.send(JSON.stringify({ type: 'webrtc_ready' }));
         // Restore the chat name after a reconnect so the user
         // doesn't have to re-join mid-session
         if (savedName) ws.send(JSON.stringify({ type: 'set_name', name: savedName }));
       } else {
-        showAuthError('Wrong password');
+        showAuthError('viewer.authError.wrongPassword');
       }
     } catch {
-      showAuthError('Connection error');
+      showAuthError('viewer.authError.generic');
     }
   }
 
-  function showAuthError(msg) {
+  let lastAuthErrorKey = null;
+  function showAuthError(key) {
+    lastAuthErrorKey = key;
+    setAuthBusy(false);
+    hideLoading();
     authScreen.style.display = 'block';
     playerScreen.style.display = 'none';
-    authError.textContent = msg;
+    authError.textContent = t(key);
     authError.style.display = 'block';
     passwordInput.focus();
     passwordInput.select();
@@ -367,15 +683,18 @@
       if (msg.type === 'webrtc_offer') {
         handleWebRTCOffer(msg.sdp, msg.iceServers);
       } else if (msg.type === 'stream_info') {
-        streamInfo.fps = Number(msg.fps) || null;
-        streamInfo.bitrate = typeof msg.bitrate === 'string' || typeof msg.bitrate === 'number' ? String(msg.bitrate) : null;
         if (msg.hasAudio) {
           hasAudio = true;
-          muteToggle.style.display = 'flex';
-          updateMuteIcon();
+          audioControls.classList.add('available');
+          applyAudio();
         }
       } else if (msg.type === 'viewer_count') {
         streamInfo.viewers = Number.isFinite(Number(msg.count)) ? Number(msg.count) : null;
+        streamInfo.maxViewers = Number.isFinite(Number(msg.maxViewers)) ? Number(msg.maxViewers) : null;
+      } else if (msg.type === 'stream_ended') {
+        streamEnded = true;
+        cleanupPeerConnection();
+        showOverlay('viewer.overlay.ended', 'viewer.overlay.endedMsg');
       } else if (msg.type === 'chat' && msg.sender && msg.message) {
         addChatMessage(msg.sender, msg.message);
       } else if (msg.type === 'chat_enabled') {
@@ -409,6 +728,7 @@
       if (video.srcObject !== remoteStream) {
         video.srcObject = remoteStream;
         video.muted = isMuted;
+        video.volume = volume;
         video.play().catch((err) => { if (err.name !== 'AbortError') console.warn('[viewer] video.play() rejected:', err); });
       }
     };
@@ -425,11 +745,11 @@
       const state = localPc.iceConnectionState;
       console.log('[viewer] iceConnectionState:', state);
       if (state === 'failed') {
-        showError('WebRTC connection failed. You may be behind a firewall that blocks UDP.');
-        setStatus('Connection failed', 'error');
+        showError('viewer.errors.firewall');
+        setStatus('viewer.status.failed', 'error');
         scheduleReconnect();
       } else if (state === 'disconnected') {
-        setStatus('Reconnecting...', 'reconnecting');
+        setStatus('viewer.status.reconnecting', 'reconnecting');
       } else if (state === 'connected' || state === 'completed') {
         setStatus('', '');
         // Log inbound RTP stats after a short delay
@@ -474,32 +794,86 @@
         sdp: localPc.localDescription.sdp,
       }));
     } catch (err) {
-      showError('WebRTC setup failed: ' + err.message);
+      console.error('[viewer] WebRTC setup failed:', err);
+      showError('viewer.errors.playback');
+      scheduleReconnect();
     }
   }
-
-  function updateMuteIcon() {
-    iconMuted.style.display = isMuted ? 'block' : 'none';
-    iconUnmuted.style.display = isMuted ? 'none' : 'block';
-  }
-
-  function toggleMute() {
-    isMuted = !isMuted;
-    video.muted = isMuted;
-    updateMuteIcon();
-  }
-  muteToggle.addEventListener('click', toggleMute);
-  video.addEventListener('click', toggleMute);
 
   function scheduleReconnect() {
     // Both ws.onclose and ICE-failure call this — one pending timer only,
     // or reconnects double up and the backoff index drifts.
-    if (reconnectTimer) return;
+    if (reconnectTimer || streamEnded) return;
+    if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+      showOverlay('viewer.overlay.unable', 'viewer.overlay.unableMsg');
+      return;
+    }
     const delay = RECONNECT_DELAYS[Math.min(reconnectAttempt, RECONNECT_DELAYS.length - 1)];
     reconnectAttempt++;
+    setStatus('viewer.status.reconnectingN', 'reconnecting', { count: reconnectAttempt });
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       connect();
     }, delay);
   }
+
+  // --- Language ---
+
+  const langSelects = Array.from(document.querySelectorAll('.lang-select'));
+
+  async function setLanguage(lng) {
+    lng = lng === 'uk' ? 'uk' : 'en';
+    try { localStorage.setItem(LANG_KEY, lng); } catch {}
+    await i18next.changeLanguage(lng);
+    applyI18n();
+    document.title = t('viewer.title');
+    langSelects.forEach((s) => { s.value = lng; });
+
+    // Re-render whatever dynamic text is currently visible. No WebSocket or
+    // PeerConnection state is touched — switching mid-stream is safe.
+    if (lastStatusArgs && lastStatusArgs.key) setStatus(lastStatusArgs.key, lastStatusArgs.cls, lastStatusArgs.opts);
+    if (loadingOverlay.classList.contains('visible') && lastLoadingKey) showLoading(lastLoadingKey);
+    if (streamOverlay.classList.contains('visible') && lastOverlayArgs) showOverlay(lastOverlayArgs.titleKey, lastOverlayArgs.messageKey);
+    if (authError.style.display === 'block' && lastAuthErrorKey) authError.textContent = t(lastAuthErrorKey);
+    setAuthBusy(lastAuthBusy);
+    updateMuteIcon();
+    syncFullscreenIcon();
+    syncStatsAria();
+    updateStats();
+  }
+
+  langSelects.forEach((s) => s.addEventListener('change', () => setLanguage(s.value)));
+
+  // --- Boot ---
+
+  // i18next must be initialized before anything renders text — including the
+  // hash auto-connect below, which fires setStatus/showLoading immediately.
+  (async () => {
+    let resources = {};
+    try {
+      const [en, uk] = await Promise.all([
+        fetch('/locales/en.json').then((r) => r.json()),
+        fetch('/locales/uk.json').then((r) => r.json()),
+      ]);
+      resources = { en: { translation: en }, uk: { translation: uk } };
+    } catch (err) {
+      console.error('[viewer] locale load failed:', err);
+    }
+    await i18next.init({ lng: pickLanguage(navigator.language), fallbackLng: 'en', resources });
+    applyI18n();
+    document.title = t('viewer.title');
+    langSelects.forEach((s) => { s.value = i18next.language; });
+    setAuthBusy(false);
+    updateMuteIcon();
+    syncFullscreenIcon();
+    syncStatsAria();
+
+    // Auto-connect if password is in the URL hash
+    const hashPassword = location.hash.slice(1);
+    if (hashPassword) {
+      password = decodeURIComponent(hashPassword);
+      history.replaceState(null, '', location.pathname);
+      connect();
+    }
+  })();
 })();

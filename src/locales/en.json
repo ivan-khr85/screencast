@@ -1,0 +1,176 @@
+{
+  "common": {
+    "language": "Language",
+    "copy": "Copy",
+    "copied": "Copied!",
+    "send": "Send"
+  },
+  "ui": {
+    "chat": "Chat",
+    "setup": {
+      "title": "Setup Required",
+      "install": "Install missing",
+      "installing": "Installing…",
+      "recheck": "Re-check",
+      "setupFailed": "Setup failed: {{message}}",
+      "ffmpeg": "FFmpeg",
+      "screenRecording": "Screen Recording",
+      "cloudflared": "cloudflared",
+      "installed": "installed",
+      "missing": "missing",
+      "missingOptional": "missing (public sharing)",
+      "granted": "granted",
+      "denied": "denied",
+      "willPrompt": "will prompt on start"
+    },
+    "settings": {
+      "title": "Settings",
+      "display": "Display",
+      "mainScreen": "Main Screen",
+      "port": "Port",
+      "fps": "FPS",
+      "quality": "Quality",
+      "qMax": "Maximum (LAN)",
+      "qHigh": "High (remote)",
+      "qMedium": "Medium",
+      "qLow": "Low",
+      "qCustom": "Custom…",
+      "bitrate": "Bitrate",
+      "bitratePh": "e.g. 8000k",
+      "password": "Password",
+      "passwordPh": "blank = auto",
+      "genPassword": "Generate password",
+      "maxViewers": "Max Viewers",
+      "audio": "Audio",
+      "audioSystem": "System Audio",
+      "audioApp": "App Audio",
+      "audioNone": "No Audio",
+      "app": "App",
+      "selectApp": "Select app...",
+      "loading": "Loading...",
+      "tunnel": "Public Tunnel",
+      "tunnelNote": "Install cloudflared to enable public sharing"
+    },
+    "start": {
+      "start": "Start Stream",
+      "stop": "Stop Stream",
+      "starting": "Starting...",
+      "stopping": "Stopping...",
+      "blockedFfmpeg": "FFmpeg is required — use \"Install missing\" above",
+      "blockedScreen": "Grant Screen Recording permission in System Settings",
+      "bitrateInvalid": "Bitrate must be a number with an optional k/M suffix, e.g. 8000k"
+    },
+    "phase": {
+      "server": "Starting server…",
+      "capture": "Starting capture…",
+      "tunnel": "Starting tunnel…"
+    },
+    "tunnelBadge": {
+      "up": "Public via Cloudflare",
+      "off": "LAN only",
+      "starting": "Tunnel starting…",
+      "failed": "Tunnel failed — LAN URL only",
+      "down": "Tunnel down — switched to LAN URL"
+    },
+    "info": {
+      "title": "Stream Info",
+      "url": "URL",
+      "password": "Password",
+      "copyLink": "Copy Link (auto-connect)",
+      "showQr": "Show QR",
+      "hideQr": "Hide QR",
+      "qrInclude": "Include password (auto-connect)",
+      "qrAria": "QR code for stream link",
+      "displayPreview": "Preview of selected display",
+      "viewers": "Viewers",
+      "audioNote": "Audio capture unavailable",
+      "dismissWarning": "Dismiss warning"
+    },
+    "toast": {
+      "urlCopied": "URL copied",
+      "passwordCopied": "Password copied",
+      "linkCopied": "Auto-connect link copied — includes the password",
+      "tunnelDown": "Public tunnel went down — sharing the LAN URL now"
+    },
+    "chatPanel": {
+      "messagePh": "Message viewers...",
+      "messageAria": "Chat message"
+    }
+  },
+  "viewer": {
+    "title": "Screen Stream",
+    "auth": {
+      "passwordPh": "Enter password",
+      "passwordAria": "Stream password",
+      "connect": "Connect",
+      "connecting": "Connecting…"
+    },
+    "status": {
+      "connecting": "Connecting...",
+      "connected": "Connected",
+      "reconnecting": "Reconnecting...",
+      "reconnectingN": "Reconnecting… ({{count}})",
+      "failed": "Connection failed"
+    },
+    "loading": {
+      "waiting": "Waiting for video…",
+      "buffering": "Buffering…",
+      "connecting": "Connecting…"
+    },
+    "authError": {
+      "wrongPassword": "Wrong password",
+      "full": "Stream is full — try again later",
+      "throttled": "Too many connection attempts. Wait a minute and try again.",
+      "connection": "Connection problem — please try again",
+      "generic": "Connection error"
+    },
+    "errors": {
+      "restarting": "Stream is restarting…",
+      "videoInterrupted": "Video connection interrupted — reconnecting…",
+      "lost": "Connection lost — reconnecting…",
+      "problem": "Connection problem — reconnecting…",
+      "firewall": "Could not establish a video connection. A firewall may be blocking it.",
+      "playback": "Could not start video playback — reconnecting…"
+    },
+    "overlay": {
+      "ended": "Stream has ended",
+      "endedMsg": "The host stopped streaming. You can try reconnecting if it comes back.",
+      "unable": "Unable to reconnect",
+      "unableMsg": "The stream is not responding. It may have ended.",
+      "reconnect": "Reconnect"
+    },
+    "stats": {
+      "fps": "fps",
+      "mbps": "Mbps",
+      "kbps": "kbps",
+      "loss": "loss",
+      "show": "Show statistics",
+      "hide": "Hide statistics",
+      "viewersSuffix_one": "viewer",
+      "viewersSuffix_other": "viewers"
+    },
+    "controls": {
+      "group": "Player controls",
+      "mute": "Mute",
+      "unmute": "Unmute",
+      "volume": "Volume",
+      "pip": "Picture in picture",
+      "fullscreen": "Fullscreen",
+      "exitFullscreen": "Exit fullscreen"
+    },
+    "chat": {
+      "open": "Chat",
+      "namePh": "Enter your name...",
+      "nameAria": "Chat name",
+      "join": "Join",
+      "messagePh": "Send a message...",
+      "messageAria": "Chat message",
+      "nameError": {
+        "empty": "Name cannot be empty",
+        "reserved": "Name reserved",
+        "taken": "Name already taken",
+        "generic": "Name not available"
+      }
+    }
+  }
+}

@@ -16,6 +16,24 @@ contextBridge.exposeInMainWorld('api', {
 
   setChat: (enabled: boolean) => ipcRenderer.invoke('stream:set-chat', enabled),
 
+  clearError: () => ipcRenderer.invoke('stream:clear-error'),
+
+  sendChatMessage: (text: string) => ipcRenderer.invoke('stream:send-chat', text),
+
+  checkReadiness: () => ipcRenderer.invoke('system:check-readiness'),
+
+  getI18n: (): Promise<{ locale: string; resources: Record<string, { translation: unknown }> }> =>
+    ipcRenderer.invoke('i18n:get'),
+
+  autoSetup: () => ipcRenderer.invoke('system:auto-setup'),
+
+  onSetupProgress: (callback: (msg: string) => void) => {
+    ipcRenderer.on(
+      'system:setup-progress',
+      (_event: Electron.IpcRendererEvent, msg: string) => callback(msg),
+    );
+  },
+
   onStatusUpdate: (callback: (status: Record<string, unknown>) => void) => {
     ipcRenderer.on(
       'stream:status-update',

@@ -222,7 +222,8 @@ function shutdown(): void {
   capture.stop();
   server.close();
   if (tunnel) tunnel.stop();
-  process.exit(0);
+  // Give the stream_ended WS frames a moment to flush before the process dies
+  setTimeout(() => process.exit(0), 150);
 }
 
 process.on('SIGINT', shutdown);
