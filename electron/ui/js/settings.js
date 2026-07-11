@@ -1,7 +1,7 @@
 // Settings persistence, device/app lists, quality presets, password gen.
 (function () {
   'use strict';
-  const { els, t } = window.App;
+  const { els, t, state } = window.App;
 
   const SETTINGS_KEY = 'screencast:settings';
 
@@ -98,10 +98,10 @@
       els.screenSelect.value = savedScreenIndex;
     }
 
-    updateDisplayThumb();
+    syncPreview();
   }
 
-  function updateDisplayThumb() {
+  function showThumbFallback() {
     const idx = parseInt(els.screenSelect.value, 10);
     const src = screenSources[idx];
     if (src && src.thumbnail) {
@@ -112,7 +112,80 @@
     }
   }
 
-  els.screenSelect.addEventListener('change', updateDisplayThumb);
+  // --- Live preview of the selected display ---
+  // Capture runs only while it can actually be seen (panel open, window
+  // visible, not streaming) so it never competes with FFmpeg for the screen.
+
+  let previewStream = null;
+  let previewToken = 0;
+
+  function stopPreview() {
+    previewToken++;
+    if (previewStream) {
+      for (const track of previewStream.getTracks()) track.stop();
+      previewStream = null;
+    }
+    els.displayPreview.srcObject = null;
+    els.displayPreview.classList.add('hidden');
+  }
+
+  async function startPreview(src) {
+    stopPreview();
+    const token = previewToken;
+    showThumbFallback(); // instant placeholder while the stream warms up
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: src.id,
+            maxWidth: 640,
+            maxHeight: 400,
+            maxFrameRate: 10,
+          },
+        },
+      });
+    } catch {
+      return; // thumbnail fallback already showing
+    }
+    if (token !== previewToken) {
+      // Display switched / panel closed while getUserMedia was pending.
+      for (const track of stream.getTracks()) track.stop();
+      return;
+    }
+    previewStream = stream;
+    els.displayPreview.srcObject = stream;
+    els.displayPreview.addEventListener('loadedmetadata', function onMeta() {
+      els.displayPreview.removeEventListener('loadedmetadata', onMeta);
+      if (token !== previewToken) return;
+      if (els.displayPreview.videoWidth) {
+        els.displayPreview.style.aspectRatio =
+          `${els.displayPreview.videoWidth} / ${els.displayPreview.videoHeight}`;
+      }
+      els.displayPreview.classList.remove('hidden');
+      els.displayThumb.classList.add('hidden');
+    });
+  }
+
+  function syncPreview() {
+    const src = screenSources[parseInt(els.screenSelect.value, 10)];
+    const wanted =
+      !!(src && src.id) &&
+      !state.streaming &&
+      !els.settings.classList.contains('hidden') &&
+      !document.hidden;
+    if (!wanted) {
+      stopPreview();
+      showThumbFallback();
+      return;
+    }
+    startPreview(src);
+  }
+
+  els.screenSelect.addEventListener('change', syncPreview);
+  document.addEventListener('visibilitychange', syncPreview);
 
   // --- Audio mode ---
 
@@ -151,5 +224,6 @@
     loadScreenSources,
     loadAudioApps,
     updateQualityVisibility,
+    syncPreview,
   };
 })();

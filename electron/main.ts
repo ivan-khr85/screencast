@@ -591,10 +591,18 @@ function getResourcesPath(): string {
     : path.join(__dirname, '..', '..', 'resources');
 }
 
+// Two default window heights: the compact idle screen, and the tall layout
+// where Advanced Settings (incl. the live display preview) fits without
+// scrolling. The tall one is capped to the display's work area.
+const COLLAPSED_HEIGHT = 580;
+function expandedHeight(): number {
+  return Math.min(1120, screen.getPrimaryDisplay().workAreaSize.height - 24);
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 420,
-    height: 580,
+    height: COLLAPSED_HEIGHT,
     minWidth: 420,
     minHeight: 580,
     resizable: true,
@@ -718,6 +726,7 @@ ipcMain.handle('screen:get-sources', async () => {
   });
   return sources.map((s, i) => ({
     index: String(i),
+    id: s.id,
     name: s.name,
     thumbnail: s.thumbnail.toDataURL(),
   }));
@@ -725,6 +734,15 @@ ipcMain.handle('screen:get-sources', async () => {
 
 ipcMain.handle('clipboard:copy', (_event, text: string) => {
   clipboard.writeText(text);
+});
+
+// Grow/shrink the window when the renderer toggles Advanced Settings so the
+// panel always fits without scrolling.
+ipcMain.handle('window:set-advanced', (_event, open: unknown) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const height = open === true ? expandedHeight() : COLLAPSED_HEIGHT;
+  const [width] = mainWindow.getSize();
+  mainWindow.setSize(width, height, true);
 });
 
 ipcMain.handle('system:check-readiness', async () => {

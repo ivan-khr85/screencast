@@ -24,6 +24,7 @@
     advancedToggle: document.getElementById('advanced-toggle'),
     screenSelect: document.getElementById('screenSelect'),
     displayThumb: document.getElementById('displayThumb'),
+    displayPreview: document.getElementById('displayPreview'),
     port: document.getElementById('port'),
     fps: document.getElementById('fps'),
     quality: document.getElementById('quality'),

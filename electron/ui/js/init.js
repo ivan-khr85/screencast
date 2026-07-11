@@ -12,6 +12,8 @@
     const show = els.settings.classList.contains('hidden');
     els.settings.classList.toggle('hidden', !show);
     els.advancedToggle.setAttribute('aria-expanded', String(show));
+    window.api.setAdvancedOpen(show);
+    window.App.settings.syncPreview();
   }
 
   els.advancedToggle.addEventListener('click', toggleAdvanced);

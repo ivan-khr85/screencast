@@ -144,6 +144,7 @@
     }
 
     state.prevRunning = state.streaming;
+    window.App.settings.syncPreview();
   }
 
   els.streamWarningDismiss.addEventListener('click', () => {

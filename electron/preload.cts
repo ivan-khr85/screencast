@@ -52,6 +52,10 @@ contextBridge.exposeInMainWorld('api', {
 
   // desktopCapturer isn't available in a sandboxed preload — the main
   // process enumerates sources via the screen:get-sources handler.
-  getScreenSources: (): Promise<Array<{ index: string; name: string; thumbnail: string }>> =>
-    ipcRenderer.invoke('screen:get-sources'),
+  getScreenSources: (): Promise<
+    Array<{ index: string; id: string; name: string; thumbnail: string }>
+  > => ipcRenderer.invoke('screen:get-sources'),
+
+  setAdvancedOpen: (open: boolean): Promise<void> =>
+    ipcRenderer.invoke('window:set-advanced', open),
 });

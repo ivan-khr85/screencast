@@ -59,11 +59,13 @@
 
 #settings .card { margin-bottom: 0; }
 
-.display-thumb {
+.display-thumb,
+.display-preview {
   width: 100%;
-  height: 76px;
-  object-fit: cover;
-  object-position: top center;
+  aspect-ratio: 16 / 10; /* placeholder; JS sets the stream's real ratio */
+  max-height: 240px;
+  object-fit: contain;
+  background: #000;
   border-radius: var(--radius-sm);
   border: 1px solid var(--hairline);
   display: block;
