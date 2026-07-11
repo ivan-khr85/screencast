@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+cd "$(dirname "$0")"
+
 echo ""
 echo "  iCast - macOS Setup"
 echo "  ==================="
@@ -9,6 +11,12 @@ echo ""
 # --- Node.js ---
 if command -v node &>/dev/null; then
   NODE_VER=$(node -v)
+  NODE_MAJOR=$(echo "${NODE_VER#v}" | cut -d. -f1)
+  if [ "$NODE_MAJOR" -lt 20 ]; then
+    echo "  [!!] Node.js $NODE_VER is too old (>= 20 required)."
+    echo "       Upgrade via: brew install node"
+    exit 1
+  fi
   echo "  [ok] Node.js $NODE_VER"
 else
   echo "  [!!] Node.js not found."
@@ -28,16 +36,27 @@ echo "  [ok] Homebrew"
 if command -v ffmpeg &>/dev/null; then
   FFMPEG_VER=$(ffmpeg -version 2>&1 | head -1 | awk '{print $3}')
   FFMPEG_MAJOR=$(echo "$FFMPEG_VER" | cut -d. -f1)
-  if [ "$FFMPEG_MAJOR" -lt 8 ]; then
-    echo "  [!!] FFmpeg $FFMPEG_VER is too old (screen capture broken on modern macOS)."
-    echo "       Upgrading..."
-    brew upgrade ffmpeg
+  if [ "$FFMPEG_MAJOR" -lt 7 ] 2>/dev/null; then
+    echo "  [!!] FFmpeg $FFMPEG_VER is too old (7+ required for the encoding pipeline)."
+    if brew list --formula ffmpeg &>/dev/null; then
+      echo "       Upgrading..."
+      if ! brew upgrade ffmpeg; then
+        echo "  [!!] brew upgrade ffmpeg failed. Upgrade manually and re-run setup."
+        exit 1
+      fi
+    else
+      echo "  [!!] ffmpeg on PATH is not managed by Homebrew. Upgrade it manually to 7+."
+      exit 1
+    fi
   else
     echo "  [ok] FFmpeg $FFMPEG_VER"
   fi
 else
   echo "  [..] Installing FFmpeg..."
-  brew install ffmpeg
+  if ! brew install ffmpeg; then
+    echo "  [!!] brew install ffmpeg failed."
+    exit 1
+  fi
 fi
 
 # Verify after install/upgrade
@@ -46,20 +65,19 @@ if ! command -v ffmpeg &>/dev/null; then
   exit 1
 fi
 
-# --- sc-audio helper (ScreenCaptureKit audio capture, macOS 13+) ---
+# --- sc-audio helper (ScreenCaptureKit audio + video fallback, macOS 13+) ---
 echo ""
 MACOS_VER=$(sw_vers -productVersion | cut -d. -f1)
 if [ "$MACOS_VER" -ge 13 ]; then
-  if [ -f "swift/sc-audio/.build/release/sc-audio" ]; then
-    echo "  [ok] sc-audio helper (ScreenCaptureKit audio)"
+  if command -v swift &>/dev/null; then
+    echo "  [..] Building sc-audio helper (incremental)..."
+    (cd swift/sc-audio && swift build -c release)
+    echo "  [ok] sc-audio helper (ScreenCaptureKit audio + video fallback)"
   else
-    if command -v swift &>/dev/null; then
-      echo "  [..] Building sc-audio helper..."
-      (cd swift/sc-audio && swift build -c release)
-      echo "  [ok] sc-audio helper built"
-    else
-      echo "  [!!] Swift not found. Install Xcode Command Line Tools: xcode-select --install"
-    fi
+    echo "  [!!] Swift not found. The sc-audio helper is required for audio capture"
+    echo "       and is the video capture fallback when FFmpeg lacks ScreenCaptureKit."
+    echo "       Install Xcode Command Line Tools: xcode-select --install"
+    exit 1
   fi
 else
   echo "  [--] macOS $MACOS_VER detected. Audio capture requires macOS 13+."
@@ -71,11 +89,15 @@ if command -v cloudflared &>/dev/null; then
   echo "  [ok] cloudflared (tunnel support)"
 else
   echo "  [--] cloudflared not installed (needed for public URL tunnels)."
-  read -rp "       Install cloudflared? [y/N] " answer
-  if [[ "$answer" =~ ^[Yy]$ ]]; then
-    brew install cloudflared
+  if [ -t 0 ]; then
+    read -rp "       Install cloudflared? [y/N] " answer
+    if [[ "$answer" =~ ^[Yy]$ ]]; then
+      brew install cloudflared
+    else
+      echo "       Skipped. Run with --no-tunnel or install later: brew install cloudflared"
+    fi
   else
-    echo "       Skipped. Run with --no-tunnel or install later: brew install cloudflared"
+    echo "       Skipped (non-interactive). Run with --no-tunnel or install later: brew install cloudflared"
   fi
 fi
 
