@@ -23,6 +23,30 @@ export interface Config {
   iceServers: RTCIceServer[];
 }
 
+export function parseKbits(bitrate: string): number | null {
+  const m = /^(\d+)([kKmM]?)$/.exec(bitrate);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return m[2].toLowerCase() === "m" ? n * 1000 : n;
+}
+
+// DEFAULTS.maxrate/bufsize are tuned for the ~100 Mbps LAN preset; for any
+// other bitrate they would defeat the cap, so derive them from the target.
+// maxrate = bitrate keeps keyframe bursts bounded (latency: bursts above the
+// path capacity turn into standing queues); bufsize = 0.5s of bitrate.
+// Returns null when the bitrate string is unparsable — callers keep DEFAULTS.
+export function deriveRateControl(
+  bitrate: string,
+): { maxrate: string; bufsize: string } | null {
+  const kbits = parseKbits(bitrate);
+  if (!kbits) return null;
+  return {
+    maxrate: `${kbits}k`,
+    bufsize: `${Math.max(1, Math.round(kbits / 2))}k`,
+  };
+}
+
 export const DEFAULTS: Config = {
   port: 8080,
   fps: 60,

@@ -34,7 +34,7 @@ import { StreamServer } from '../src/server.js';
 import { generatePassword } from '../src/auth.js';
 import { Tunnel } from '../src/tunnel.js';
 import { isScreenCaptureKitAvailable, listAudioApps } from '../src/audio-setup.js';
-import { DEFAULTS, AudioConfig, AudioMode } from '../src/constants.js';
+import { DEFAULTS, deriveRateControl, AudioConfig, AudioMode } from '../src/constants.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -326,14 +326,6 @@ function displayRefreshRate(screenIndex?: string): number {
   return clampInt(Math.round(hz), 1, 120, 60);
 }
 
-function parseKbits(bitrate: string): number | null {
-  const m = /^(\d+)([kKmM]?)$/.exec(bitrate);
-  if (!m) return null;
-  const n = parseInt(m[1], 10);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  return m[2].toLowerCase() === 'm' ? n * 1000 : n;
-}
-
 let starting = false;
 
 async function startStream(config: StreamConfig): Promise<void> {
@@ -373,11 +365,8 @@ async function doStartStream(config: StreamConfig): Promise<void> {
   let maxrate = DEFAULTS.maxrate;
   let bufsize = DEFAULTS.bufsize;
   if (config.bitrate !== DEFAULTS.bitrate) {
-    const kbits = parseKbits(config.bitrate);
-    if (kbits) {
-      maxrate = `${Math.round(kbits * 1.5)}k`;
-      bufsize = `${kbits * 2}k`;
-    }
+    const derived = deriveRateControl(config.bitrate);
+    if (derived) ({ maxrate, bufsize } = derived);
   }
 
   const setPhase = (phase: string): void => {

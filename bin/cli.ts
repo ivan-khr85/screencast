@@ -6,7 +6,7 @@ import { StreamServer } from '../src/server.js';
 import { generatePassword } from '../src/auth.js';
 import { Tunnel } from '../src/tunnel.js';
 import { isScreenCaptureKitAvailable, listAudioApps } from '../src/audio-setup.js';
-import { DEFAULTS, AudioConfig, AudioMode } from '../src/constants.js';
+import { DEFAULTS, deriveRateControl, AudioConfig, AudioMode } from '../src/constants.js';
 
 interface CliOptions {
   port: string;
@@ -90,6 +90,18 @@ const password = opts.password || generatePassword();
 const wantAudio = opts.audio !== false;
 const wantTunnel = opts.tunnel !== false;
 
+// The default ~100 Mbps bitrate is a LAN preset; through an internet uplink
+// it creates standing queues (seconds of latency) and loss. When the tunnel
+// is on and the user didn't choose a bitrate, drop to a remote-friendly one.
+let bitrate = opts.bitrate;
+if (wantTunnel && program.getOptionValueSource('bitrate') !== 'cli') {
+  bitrate = '20000k';
+  console.log('  Tunnel enabled: using remote-friendly bitrate 20000k (override with --bitrate, or --no-tunnel for LAN max)');
+}
+
+// DEFAULTS.maxrate/bufsize only suit the default bitrate — derive otherwise.
+const rateControl = bitrate !== DEFAULTS.bitrate ? deriveRateControl(bitrate) : null;
+
 // Detect devices
 let screenIndex: string;
 
@@ -138,7 +150,7 @@ if (wantAudio) {
 const server = new StreamServer(password, {
   port,
   fps,
-  bitrate: opts.bitrate,
+  bitrate,
   maxViewers,
 });
 server.setHasAudio(audioConfig.mode !== 'none');
@@ -147,7 +159,8 @@ await server.listen(port);
 // Start capture
 const capture = new Capture({
   fps,
-  bitrate: opts.bitrate,
+  bitrate,
+  ...(rateControl ?? {}),
   gopSize: Math.max(2, Math.round(fps / 6)),
 });
 

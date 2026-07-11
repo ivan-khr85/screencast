@@ -113,6 +113,17 @@
   }
   els.quality.addEventListener('change', updateQualityVisibility);
 
+  // Tunnel means remote viewers: the LAN-max preset floods a typical uplink
+  // and inflates viewer latency by seconds. Nudge to the remote preset when
+  // the user turns the tunnel on and hasn't picked a quality themselves.
+  els.tunnel.addEventListener('change', () => {
+    if (els.tunnel.checked && els.quality.value === '100750k') {
+      els.quality.value = '20000k';
+      updateQualityVisibility();
+      saveSettings();
+    }
+  });
+
   // --- Password generation (matches the 12-hex-char server format) ---
 
   els.genPassword.addEventListener('click', () => {

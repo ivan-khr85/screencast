@@ -280,11 +280,11 @@
   // Measured playback stats (real fps/bitrate/loss from WebRTC, not the
   // configured values the server advertises)
   let lastRtp = null;
-  let measured = { fps: null, kbps: null, lossPct: null };
+  let measured = { fps: null, kbps: null, lossPct: null, bufMs: null };
 
   function resetMeasuredStats() {
     lastRtp = null;
-    measured = { fps: null, kbps: null, lossPct: null };
+    measured = { fps: null, kbps: null, lossPct: null, bufMs: null };
   }
 
   setInterval(() => {
@@ -294,6 +294,8 @@
       let frames = null;
       let lost = 0;
       let received = 0;
+      let jbDelay = null;
+      let jbEmitted = null;
       let found = false;
       stats.forEach((report) => {
         if (report.type === 'inbound-rtp') {
@@ -303,6 +305,12 @@
           received += report.packetsReceived || 0;
           if (report.kind === 'video' && typeof report.framesDecoded === 'number') {
             frames = report.framesDecoded;
+          }
+          if (report.kind === 'video'
+              && typeof report.jitterBufferDelay === 'number'
+              && typeof report.jitterBufferEmittedCount === 'number') {
+            jbDelay = report.jitterBufferDelay;
+            jbEmitted = report.jitterBufferEmittedCount;
           }
         }
       });
@@ -320,9 +328,17 @@
           measured.lossPct = dLost > 0 && dLost + dRecv > 0
             ? Math.round((dLost / (dLost + dRecv)) * 1000) / 10
             : 0;
+          // Average time each video frame sat in the receive jitter buffer
+          // over this interval — the browser-added latency component.
+          if (jbDelay != null && lastRtp.jbDelay != null) {
+            const dEmitted = (jbEmitted || 0) - (lastRtp.jbEmitted || 0);
+            if (dEmitted > 0) {
+              measured.bufMs = Math.round(((jbDelay - lastRtp.jbDelay) / dEmitted) * 1000);
+            }
+          }
         }
       }
-      lastRtp = { ts: now, bytes, frames, lost, received };
+      lastRtp = { ts: now, bytes, frames, lost, received, jbDelay, jbEmitted };
     }).catch(() => {});
   }, 1000);
 
@@ -356,6 +372,10 @@
 
     if (measured.lossPct != null && measured.lossPct > 0) {
       parts.push([measured.lossPct + '%', ' ' + t('viewer.stats.loss')]);
+    }
+
+    if (measured.bufMs != null) {
+      parts.push([measured.bufMs + ' ms', ' ' + t('viewer.stats.buffer')]);
     }
 
     if (streamInfo.viewers != null) {
@@ -719,10 +739,20 @@
 
     localPc.ontrack = (event) => {
       console.log('[viewer] ontrack:', event.track.kind, 'streams:', event.streams.length);
-      if (event.track.kind === 'video' && event.receiver && 'playoutDelayHint' in event.receiver) {
-        // Minimize browser jitter buffer — on a local network there is no packet
-        // reordering, so Chrome's default 200-500ms video buffer is pure latency.
-        event.receiver.playoutDelayHint = 0;
+      if (event.receiver) {
+        // Minimize the receive jitter buffer on BOTH tracks: the browser slaves
+        // video playout to the audio buffer for lip sync, so an unhinted audio
+        // track would drag video back up to NetEQ's default delay anyway.
+        // jitterBufferTarget is the standard knob (Chrome 110+, Safari 17.4+,
+        // Firefox); playoutDelayHint covers older Chromium. Both are targets —
+        // the browser still grows the buffer under real network jitter.
+        const receiver = event.receiver;
+        try {
+          if ('jitterBufferTarget' in receiver) receiver.jitterBufferTarget = 0;
+        } catch { /* out-of-range or read-only on some engines */ }
+        try {
+          if ('playoutDelayHint' in receiver) receiver.playoutDelayHint = 0;
+        } catch { /* ignore */ }
       }
       remoteStream.addTrack(event.track);
       if (video.srcObject !== remoteStream) {

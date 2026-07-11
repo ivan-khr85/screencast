@@ -146,6 +146,7 @@
       "mbps": "Mbps",
       "kbps": "kbps",
       "loss": "loss",
+      "buffer": "buf",
       "show": "Show statistics",
       "hide": "Hide statistics",
       "viewersSuffix_one": "viewer",

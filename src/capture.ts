@@ -374,7 +374,12 @@ export class Capture extends EventEmitter {
 
     const ffmpegArgs: string[] = [
       '-hide_banner', '-loglevel', 'error',
-      '-thread_queue_size', '16',
+      // Small input queue: raw frames are huge (w*h*1.5 bytes), letting
+      // ffmpeg pre-read 16 of them is ~266ms of hidden latency when the
+      // encoder lags. 2 frames just backpressures the pipe sooner.
+      '-thread_queue_size', '2',
+      '-probesize', '32',
+      '-analyzeduration', '0',
       '-f', 'rawvideo',
       '-pixel_format', 'nv12',
       '-video_size', videoSize,
@@ -406,7 +411,54 @@ export class Capture extends EventEmitter {
     const encoder = spawn('ffmpeg', ffmpegArgs, { stdio: ['pipe', 'ignore', 'pipe'] });
     this.#videoEncoder = encoder;
 
-    scVideo.stdout!.pipe(encoder.stdin!);
+    // Latest-frame-wins pipe instead of stdout.pipe(stdin): a plain pipe has
+    // no drop policy, so when the encoder falls behind (allow_sw software
+    // fallback, thermal throttle) stale frames queue in the pipe buffers and
+    // the added delay never drains. Here we cut the stream into whole NV12
+    // frames and, under backpressure, keep only the newest complete frame.
+    // Never write a partial frame — rawvideo input has no framing, one short
+    // write corrupts the stream permanently.
+    const frameSize = (dims.width * dims.height * 3) / 2; // NV12: Y + interleaved UV
+    let chunks: Buffer[] = [];
+    let buffered = 0;
+    let pendingFrame: Buffer | null = null;
+    let writable = true;
+    let droppedFrames = 0;
+
+    encoder.stdin!.on('drain', () => {
+      writable = true;
+      if (pendingFrame && encoder.stdin!.writable) {
+        const frame = pendingFrame;
+        pendingFrame = null;
+        writable = encoder.stdin!.write(frame);
+      }
+    });
+
+    scVideo.stdout!.on('data', (chunk: Buffer) => {
+      if (this.#stopped || !encoder.stdin!.writable) return;
+      chunks.push(chunk);
+      buffered += chunk.length;
+      if (buffered < frameSize) return;
+      let buf = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks);
+      while (buf.length >= frameSize) {
+        const frame = buf.subarray(0, frameSize);
+        buf = buf.subarray(frameSize);
+        if (writable) {
+          writable = encoder.stdin!.write(frame);
+        } else {
+          if (pendingFrame) {
+            droppedFrames++;
+            if (droppedFrames === 1 || droppedFrames % 300 === 0) {
+              this.emit('log', `encoder behind: dropped ${droppedFrames} raw frames (latest-frame-wins)`);
+            }
+          }
+          pendingFrame = frame;
+        }
+      }
+      chunks = buf.length > 0 ? [buf] : [];
+      buffered = buf.length;
+    });
+
     scVideo.stdout!.on('error', () => {});
     encoder.stdin!.on('error', () => {});
 
@@ -606,7 +658,10 @@ export class Capture extends EventEmitter {
       '-c:a', 'libopus',
       '-b:a', this.#config.audioBitrate,
       '-frame_duration', '20',
-      '-application', 'audio',
+      // lowdelay = CELT-only: ~5ms encoder lookahead instead of ~22.5ms.
+      // Video playout is slaved to audio via A/V sync, so audio delay is
+      // a floor on video latency.
+      '-application', 'lowdelay',
       '-vbr', 'on',
       '-f', 'rtp', `rtp://127.0.0.1:${port}`,
     ], {
@@ -702,7 +757,7 @@ export class Capture extends EventEmitter {
       '-c:a', 'libopus',
       '-b:a', this.#config.audioBitrate,
       '-frame_duration', '20',
-      '-application', 'audio',
+      '-application', 'lowdelay',
       '-vbr', 'on',
       '-f', 'rtp', `rtp://127.0.0.1:${port}`,
     ], { stdio: ['ignore', 'ignore', 'pipe'] });
