@@ -34,7 +34,7 @@ import { StreamServer } from '../src/server.js';
 import { generatePassword } from '../src/auth.js';
 import { Tunnel } from '../src/tunnel.js';
 import { isScreenCaptureKitAvailable, listAudioApps } from '../src/audio-setup.js';
-import { DEFAULTS, deriveRateControl, AudioConfig, AudioMode } from '../src/constants.js';
+import { DEFAULTS, deriveRateControl, validateTurnUrl, buildIceServers, AudioConfig, AudioMode, TurnConfig } from '../src/constants.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -197,6 +197,9 @@ interface StreamConfig {
   chat: boolean;
   debug: boolean;
   screenIndex?: string;
+  turnUrl?: string;
+  turnUsername?: string;
+  turnPassword?: string;
 }
 
 type TunnelStatus = 'off' | 'starting' | 'up' | 'failed' | 'down';
@@ -390,6 +393,22 @@ async function doStartStream(config: StreamConfig): Promise<void> {
     config.bitrate = DEFAULTS.bitrate;
   }
 
+  // TURN is opt-in; a bad URL must fail loudly, not silently degrade to
+  // STUN-only — the user set it up precisely because STUN-only doesn't work.
+  let turn: TurnConfig | undefined;
+  if (typeof config.turnUrl === 'string' && config.turnUrl.trim() !== '') {
+    const turnUrl = config.turnUrl.trim();
+    if (!validateTurnUrl(turnUrl)) {
+      throw new Error('Invalid TURN URL — expected turn:host:port (no turns:, no ?transport=tcp)');
+    }
+    const username = typeof config.turnUsername === 'string' ? config.turnUsername.trim() : '';
+    const credential = typeof config.turnPassword === 'string' ? config.turnPassword.trim() : '';
+    if (!username || !credential) {
+      throw new Error('TURN server requires both username and password');
+    }
+    turn = { url: turnUrl, username, credential };
+  }
+
   // The ~100 Mbps default is a LAN preset; through an internet uplink it
   // creates standing queues and loss. When the tunnel is on and the user
   // left the bitrate at the LAN default, drop to a remote-friendly one
@@ -460,6 +479,7 @@ async function doStartStream(config: StreamConfig): Promise<void> {
     fps: config.fps,
     bitrate: config.bitrate,
     maxViewers: config.maxViewers,
+    ...(turn ? { iceServers: buildIceServers(turn) } : {}),
   });
   server.setHasAudio(audioConfig.mode !== 'none');
   server.setChatEnabled(config.chat !== false);

@@ -134,6 +134,18 @@
         <input type="number" id="maxViewers" value="5" min="1" max="50">
       </div>
       <div class="field">
+        <label for="turnUrl" data-i18n="ui.settings.turnServer">TURN server (optional)</label>
+        <input type="text" id="turnUrl" placeholder="turn:host:3478" data-i18n-placeholder="ui.settings.turnServerPh">
+      </div>
+      <div class="field">
+        <label for="turnUser" data-i18n="ui.settings.turnUser">TURN username</label>
+        <input type="text" id="turnUser" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="turnPass" data-i18n="ui.settings.turnPass">TURN password</label>
+        <input type="password" id="turnPass" autocomplete="off">
+      </div>
+      <div class="field">
         <label for="audioMode" data-i18n="ui.settings.audio">Audio</label>
         <select id="audioMode">
           <option value="system" selected data-i18n="ui.settings.audioSystem">System Audio</option>

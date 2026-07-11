@@ -6,7 +6,7 @@ import { StreamServer } from '../src/server.js';
 import { generatePassword } from '../src/auth.js';
 import { Tunnel } from '../src/tunnel.js';
 import { isScreenCaptureKitAvailable, listAudioApps } from '../src/audio-setup.js';
-import { DEFAULTS, deriveRateControl, AudioConfig, AudioMode } from '../src/constants.js';
+import { DEFAULTS, deriveRateControl, validateTurnUrl, buildIceServers, AudioConfig, AudioMode, TurnConfig } from '../src/constants.js';
 
 interface CliOptions {
   port: string;
@@ -18,6 +18,9 @@ interface CliOptions {
   audioMode?: string;
   audioApp?: string;
   tunnel: boolean;
+  turn?: string;
+  turnUser?: string;
+  turnPass?: string;
   wsFallback: boolean;
   debugMenu: boolean;
   listDevices?: boolean;
@@ -37,6 +40,9 @@ program
   .option('--audio-mode <mode>', 'Audio mode: system, app, none (default: system)')
   .option('--audio-app <bundleID>', 'Bundle ID of app to capture audio from')
   .option('--no-tunnel', 'Disable cloudflared tunnel (LAN only)')
+  .option('--turn <url>', 'TURN server for remote WebRTC, e.g. turn:host:3478 (UDP only)')
+  .option('--turn-user <username>', 'TURN username (required with --turn)')
+  .option('--turn-pass <password>', 'TURN password (required with --turn)')
   .option('--no-ws-fallback', 'Disable the fMP4-over-WebSocket fallback for viewers that cannot connect via WebRTC')
   .option('--no-debug-menu', 'Hide the debug panel in the viewer page')
   .option('--list-devices', 'List available capture devices and exit')
@@ -93,6 +99,22 @@ if (!/^\d+[kKmM]?$/.test(opts.bitrate)) {
 const password = opts.password || generatePassword();
 const wantAudio = opts.audio !== false;
 const wantTunnel = opts.tunnel !== false;
+
+let turn: TurnConfig | undefined;
+if (opts.turn) {
+  if (!validateTurnUrl(opts.turn)) {
+    console.error(`Invalid --turn: "${opts.turn}" (expected turn:host:port — no turns:, no ?transport=tcp)`);
+    process.exit(1);
+  }
+  if (!opts.turnUser || !opts.turnPass) {
+    console.error('--turn requires both --turn-user and --turn-pass');
+    process.exit(1);
+  }
+  turn = { url: opts.turn, username: opts.turnUser, credential: opts.turnPass };
+} else if (opts.turnUser || opts.turnPass) {
+  console.error('--turn-user/--turn-pass require --turn <url>');
+  process.exit(1);
+}
 
 // The default ~100 Mbps bitrate is a LAN preset; through an internet uplink
 // it creates standing queues (seconds of latency) and loss. When the tunnel
@@ -157,6 +179,7 @@ const server = new StreamServer(password, {
   bitrate,
   maxViewers,
   fallbackEnabled: opts.wsFallback !== false,
+  ...(turn ? { iceServers: buildIceServers(turn) } : {}),
 });
 server.setHasAudio(audioConfig.mode !== 'none');
 server.setDebugEnabled(opts.debugMenu !== false);

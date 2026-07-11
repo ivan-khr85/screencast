@@ -64,6 +64,10 @@
       "passwordPh": "blank = auto",
       "genPassword": "Generate password",
       "maxViewers": "Max Viewers",
+      "turnServer": "TURN server (optional)",
+      "turnServerPh": "turn:host:3478",
+      "turnUser": "TURN username",
+      "turnPass": "TURN password",
       "audio": "Audio",
       "audioSystem": "System Audio",
       "audioApp": "App Audio",
@@ -158,7 +162,7 @@
       "problem": "Connection problem — reconnecting…",
       "firewall": "Could not establish a video connection. A firewall may be blocking it.",
       "playback": "Could not start video playback — reconnecting…",
-      "webrtcFallback": "Direct connection failed — switching to compatibility mode…"
+      "webrtcFallback": "Switching to compatibility mode…"
     },
     "overlay": {
       "ended": "Stream has ended",

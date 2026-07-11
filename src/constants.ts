@@ -50,6 +50,31 @@ export function deriveRateControl(
   };
 }
 
+// Accepts only what werift's parseIceServers can actually use: a plain
+// `turn:host:port` string URL, optionally `?transport=udp`. `turns:`,
+// `?transport=tcp` (needs PeerConfig.forceTurnTCP) and IPv6 literals (werift
+// splits host:port on ":") are rejected. Returns the URL or null.
+export function validateTurnUrl(url: string): string | null {
+  return /^turn:[a-z0-9.-]+:\d{1,5}(\?transport=udp)?$/i.test(url) ? url : null;
+}
+
+export interface TurnConfig {
+  url: string;
+  username: string;
+  credential: string;
+}
+
+// DEFAULTS.iceServers plus one TURN entry. The same array is handed to both
+// werift (uses the first `turn:` entry, string urls only) and the browser
+// RTCPeerConnection (standard {urls, username, credential} shape).
+export function buildIceServers(turn?: TurnConfig): RTCIceServer[] {
+  const servers = [...DEFAULTS.iceServers];
+  if (turn) {
+    servers.push({ urls: turn.url, username: turn.username, credential: turn.credential });
+  }
+  return servers;
+}
+
 export const DEFAULTS: Config = {
   port: 8080,
   fps: 60,

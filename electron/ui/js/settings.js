@@ -16,6 +16,9 @@
       maxViewers: els.maxViewers.value,
       audioMode: els.audioMode.value,
       tunnel: els.tunnel.checked,
+      turnUrl: els.turnUrl.value,
+      turnUser: els.turnUser.value,
+      turnPass: els.turnPass.value,
       chat: els.chat.checked,
       debugMenu: els.debugMenu.checked,
       screenIndex: els.screenSelect.value,
@@ -34,6 +37,9 @@
     }
     if (data.maxViewers) els.maxViewers.value = data.maxViewers;
     if (typeof data.tunnel === 'boolean') els.tunnel.checked = data.tunnel;
+    if (typeof data.turnUrl === 'string') els.turnUrl.value = data.turnUrl;
+    if (typeof data.turnUser === 'string') els.turnUser.value = data.turnUser;
+    if (typeof data.turnPass === 'string') els.turnPass.value = data.turnPass;
     if (typeof data.chat === 'boolean') els.chat.checked = data.chat;
     if (typeof data.debugMenu === 'boolean') els.debugMenu.checked = data.debugMenu;
     if (data.audioMode && ['system', 'app', 'none'].includes(data.audioMode)) {

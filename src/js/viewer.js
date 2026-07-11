@@ -51,6 +51,7 @@
   let preferFallback = new URLSearchParams(location.search).get('ws') === '1';
   let webrtcFailCycles = 0; // survives reconnects — breaks the retry loop
   let fallbackTimer = null;
+  let fallbackPillPending = false; // flash "Compatibility mode" once MSE plays
   let pendingCandidates = []; // server candidates that raced the offer
   let remoteDescSet = false;
   let lastMessageAt = Date.now(); // watchdog: server pings every 25s
@@ -158,7 +159,16 @@
     loadingOverlay.classList.remove('visible');
   }
 
-  video.addEventListener('playing', hideLoading);
+  video.addEventListener('playing', () => {
+    hideLoading();
+    if (transport === 'ws' && fallbackPillPending) {
+      // Mirror the WebRTC "Connected" flash; the stats overlay keeps showing
+      // the active transport for anyone who wants it.
+      fallbackPillPending = false;
+      setStatus('viewer.status.fallback', 'connected');
+      setTimeout(() => setStatus('', ''), 2000);
+    }
+  });
   video.addEventListener('loadeddata', hideLoading);
   video.addEventListener('waiting', () => {
     if (authenticated && !streamEnded) showLoading('viewer.loading.buffering');
@@ -363,6 +373,17 @@
     }
   }
 
+  // Viewer loaded the page over LAN/loopback? Then WebRTC host candidates
+  // have a real chance and deserve the full connect window.
+  function isPrivateHost() {
+    const h = location.hostname;
+    return (
+      h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]' ||
+      h.endsWith('.local') ||
+      /^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h)
+    );
+  }
+
   function cleanupPeerConnection() {
     clearFallbackTimer();
     pendingCandidates = [];
@@ -387,6 +408,7 @@
     webrtcFailCycles++;
     console.warn('[viewer] WebRTC failed — switching to WebSocket media fallback');
     cleanupPeerConnection();
+    setStatus('viewer.status.fallback', 'reconnecting');
     showError('viewer.errors.webrtcFallback', true);
     showLoading('viewer.loading.waiting');
     sendJson({ type: 'transport_fallback' });
@@ -545,6 +567,10 @@
       } else if (msg.type === 'fallback_start') {
         if (Viewer.mse && typeof msg.mime === 'string') {
           transport = 'ws';
+          // Covers forced ?ws=1 and sticky-preferFallback reconnects, which
+          // never go through switchToFallback().
+          setStatus('viewer.status.fallback', 'reconnecting');
+          fallbackPillPending = true;
           Viewer.mse.reset();
           Viewer.mse.start(msg.mime);
         }
@@ -655,7 +681,6 @@
       if (state === 'failed') {
         // Direct media path impossible — don't loop reconnects, switch to
         // the WebSocket fallback on the still-open signaling socket.
-        setStatus('viewer.status.fallback', 'reconnecting');
         switchToFallback();
       } else if (state === 'disconnected') {
         setStatus('viewer.status.reconnecting', 'reconnecting');
@@ -690,13 +715,19 @@
 
       // If WebRTC can't get connected quickly it likely never will (ICE can
       // sit in "checking" for ages on hostile NATs) — arm the fallback.
+      // A remote viewer with STUN-only servers has no relay to wait for, so
+      // don't make them stare at a black screen: cut the window to 4s. With
+      // TURN configured (or on LAN) keep 9s — relay allocation is slower.
+      const hasTurn = (iceServers || []).some((s) =>
+        String(Array.isArray(s.urls) ? s.urls[0] : s.urls).startsWith('turn:'));
+      const connectWindowMs = (!isPrivateHost() && !hasTurn) ? 4000 : 9000;
       clearFallbackTimer();
       fallbackTimer = setTimeout(() => {
         if (pc === localPc && localPc.connectionState !== 'connected') {
-          console.warn('[viewer] WebRTC not connected after 9s — falling back');
+          console.warn(`[viewer] WebRTC not connected after ${connectWindowMs / 1000}s — falling back`);
           switchToFallback();
         }
-      }, 9000);
+      }, connectWindowMs);
     } catch (err) {
       console.error('[viewer] WebRTC setup failed:', err);
       showError('viewer.errors.playback');
