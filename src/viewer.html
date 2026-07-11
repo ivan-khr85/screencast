@@ -5,38 +5,56 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; media-src 'self' blob:">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Screen Stream</title>
-<link rel="stylesheet" href="/viewer.css">
+<link rel="stylesheet" href="/styles/tokens.css">
+<link rel="stylesheet" href="/styles/viewer-base.css">
+<link rel="stylesheet" href="/styles/viewer-player.css">
+<link rel="stylesheet" href="/styles/viewer-chat.css">
 </head>
 <body>
 
+<div id="ambient-glow" aria-hidden="true"></div>
+
+<!-- Top bar lives OUTSIDE #player-screen on purpose: requestFullscreen() is
+     called on #player-screen, so the bar disappears in fullscreen. -->
+<header id="top-bar">
+  <img src="/assets/icon-128.png" alt="" aria-hidden="true">
+  <span class="wordmark">Screencast</span>
+</header>
+
 <div id="auth-screen">
-  <h1 data-i18n="viewer.title">Screen Stream</h1>
-  <form id="auth-form">
-    <input type="text" id="password-input" placeholder="Enter password" autocomplete="off" autofocus aria-label="Stream password" data-i18n-placeholder="viewer.auth.passwordPh" data-i18n-aria-label="viewer.auth.passwordAria">
-    <button type="submit" id="auth-submit">Connect</button>
-    <div id="auth-error" role="alert"></div>
-  </form>
-  <select class="lang-select" id="auth-lang" aria-label="Language" data-i18n-aria-label="common.language">
-    <option value="en">English</option>
-    <option value="uk">Українська</option>
-  </select>
+  <div class="auth-card">
+    <h1 data-i18n="viewer.title">Screen Stream</h1>
+    <form id="auth-form">
+      <input type="text" id="password-input" placeholder="Enter password" autocomplete="off" autofocus aria-label="Stream password" data-i18n-placeholder="viewer.auth.passwordPh" data-i18n-aria-label="viewer.auth.passwordAria">
+      <button type="submit" id="auth-submit" class="btn-cta">Connect</button>
+      <div id="auth-error" role="alert"></div>
+    </form>
+    <select class="lang-select" id="auth-lang" aria-label="Language" data-i18n-aria-label="common.language">
+      <option value="en">English</option>
+      <option value="uk">Українська</option>
+    </select>
+  </div>
 </div>
 
 <!-- Everything that must stay visible in fullscreen lives inside #player-screen:
-     requestFullscreen() is called on this element, so fixed-position children
-     keep rendering while the rest of the document is hidden. -->
+     requestFullscreen() is called on this element, so absolutely-positioned
+     children keep rendering while the rest of the document is hidden. -->
 <div id="player-screen">
   <video id="video" autoplay muted playsinline></video>
 
   <div id="loading-overlay" aria-live="polite">
-    <div class="spinner" aria-hidden="true"></div>
-    <div id="loading-text">Waiting for video&hellip;</div>
+    <div class="overlay-card">
+      <div class="spinner" aria-hidden="true"></div>
+      <div id="loading-text">Waiting for video&hellip;</div>
+    </div>
   </div>
 
   <div id="stream-overlay">
-    <div id="overlay-title">Stream has ended</div>
-    <div id="overlay-message"></div>
-    <button id="overlay-retry" data-i18n="viewer.overlay.reconnect">Reconnect</button>
+    <div class="overlay-card">
+      <div id="overlay-title">Stream has ended</div>
+      <div id="overlay-message"></div>
+      <button id="overlay-retry" class="btn-cta" data-i18n="viewer.overlay.reconnect">Reconnect</button>
+    </div>
   </div>
 
   <div id="controls" role="group" aria-label="Player controls" data-i18n-aria-label="viewer.controls.group">
@@ -68,17 +86,28 @@
   <div id="error-toasts" aria-live="assertive"></div>
 
   <button id="chat-toggle" aria-label="Chat" data-i18n-aria-label="viewer.chat.open">
-    <span aria-hidden="true">&#128172;</span>
+    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
     <span class="badge" id="chat-badge"></span>
   </button>
   <div id="chat-panel">
     <div id="chat-resize-handle" aria-hidden="true"></div>
-    <div id="chat-name-row">
-      <input type="text" id="chat-name-input" placeholder="Enter your name..." maxlength="30" autocomplete="off" aria-label="Chat name" data-i18n-placeholder="viewer.chat.namePh" data-i18n-aria-label="viewer.chat.nameAria">
-      <button id="chat-name-btn" data-i18n="viewer.chat.join">Join</button>
+    <div class="chat-header">
+      <span data-i18n="viewer.chat.title">Live Chat</span>
     </div>
-    <div id="chat-name-error" role="alert"></div>
+    <div class="chat-welcome">
+      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg>
+      <div class="chat-welcome-title" data-i18n="viewer.chat.welcomeTitle">Welcome!</div>
+      <div class="chat-welcome-body" data-i18n="viewer.chat.welcomeBody">Introduce yourself and join the conversation.</div>
+    </div>
     <div id="chat-messages" role="log" aria-live="polite"></div>
+    <div id="chat-name-row">
+      <p class="chat-join-hint" data-i18n="viewer.chat.needName">You need a display name to chat.</p>
+      <div class="chat-name-fields">
+        <input type="text" id="chat-name-input" placeholder="Enter your name..." maxlength="30" autocomplete="off" aria-label="Chat name" data-i18n-placeholder="viewer.chat.namePh" data-i18n-aria-label="viewer.chat.nameAria">
+        <button id="chat-name-btn" data-i18n="viewer.chat.join">Join</button>
+      </div>
+      <div id="chat-name-error" role="alert"></div>
+    </div>
     <div id="chat-input-row" style="display:none;">
       <input type="text" id="chat-input" placeholder="Send a message..." maxlength="500" autocomplete="off" aria-label="Chat message" data-i18n-placeholder="viewer.chat.messagePh" data-i18n-aria-label="viewer.chat.messageAria">
       <button id="chat-send" data-i18n="common.send">Send</button>
@@ -88,6 +117,8 @@
 
 <script src="/vendor/i18next.min.js"></script>
 <script src="/i18n-dom.js"></script>
-<script src="/viewer.js"></script>
+<script src="/js/viewer-chat.js"></script>
+<script src="/js/viewer-stats.js"></script>
+<script src="/js/viewer.js"></script>
 </body>
 </html>

@@ -469,13 +469,28 @@ export class StreamServer {
   }
 
   #handleHttp(req: http.IncomingMessage, res: http.ServerResponse): void {
+    const CSS = "text/css; charset=utf-8";
+    const JS = "application/javascript; charset=utf-8";
+    const WOFF2 = "font/woff2";
     const STATIC_FILES: Record<string, { file: string; type: string }> = {
       "/": { file: "viewer.html", type: "text/html; charset=utf-8" },
       "/index.html": { file: "viewer.html", type: "text/html; charset=utf-8" },
-      "/viewer.css": { file: "viewer.css", type: "text/css; charset=utf-8" },
-      "/viewer.js": { file: "viewer.js", type: "application/javascript; charset=utf-8" },
-      "/i18n-dom.js": { file: "i18n-dom.js", type: "application/javascript; charset=utf-8" },
-      "/vendor/i18next.min.js": { file: "vendor/i18next.min.js", type: "application/javascript; charset=utf-8" },
+      "/styles/tokens.css": { file: "styles/tokens.css", type: CSS },
+      "/styles/viewer-base.css": { file: "styles/viewer-base.css", type: CSS },
+      "/styles/viewer-player.css": { file: "styles/viewer-player.css", type: CSS },
+      "/styles/viewer-chat.css": { file: "styles/viewer-chat.css", type: CSS },
+      "/js/viewer.js": { file: "js/viewer.js", type: JS },
+      "/js/viewer-chat.js": { file: "js/viewer-chat.js", type: JS },
+      "/js/viewer-stats.js": { file: "js/viewer-stats.js", type: JS },
+      "/fonts/manrope-600.woff2": { file: "fonts/manrope-600.woff2", type: WOFF2 },
+      "/fonts/manrope-700.woff2": { file: "fonts/manrope-700.woff2", type: WOFF2 },
+      "/fonts/inter-400.woff2": { file: "fonts/inter-400.woff2", type: WOFF2 },
+      "/fonts/inter-500.woff2": { file: "fonts/inter-500.woff2", type: WOFF2 },
+      "/fonts/inter-600.woff2": { file: "fonts/inter-600.woff2", type: WOFF2 },
+      "/fonts/inter-700.woff2": { file: "fonts/inter-700.woff2", type: WOFF2 },
+      "/assets/icon-128.png": { file: "assets/icon-128.png", type: "image/png" },
+      "/i18n-dom.js": { file: "i18n-dom.js", type: JS },
+      "/vendor/i18next.min.js": { file: "vendor/i18next.min.js", type: JS },
       "/locales/en.json": { file: "locales/en.json", type: "application/json; charset=utf-8" },
       "/locales/uk.json": { file: "locales/uk.json", type: "application/json; charset=utf-8" },
     };

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Screencast is a macOS (and partially Windows) screen-streaming app that delivers the screen to browser viewers over **WebRTC**. FFmpeg captures and H.264-encodes the screen, emits RTP to a local UDP socket; the Node.js server forwards those RTP packets into a `werift` `RTCPeerConnection` per viewer. Audio is captured by the Swift `sc-audio` helper (ScreenCaptureKit, macOS 13+) as raw PCM, encoded to Opus RTP by a second FFmpeg. Signaling (auth, SDP offer/answer, chat) runs over WebSocket on the same HTTP server that serves the viewer page. An optional Cloudflare quick tunnel exposes the stream to the internet.
 
-There are two interfaces: a CLI (`bin/cli.ts`) and an Electron desktop app (`electron/`).
+There are two interfaces: a CLI (`bin/cli.ts`) and an Electron desktop app (`electron/`). Both UIs (browser viewer and Electron control panel) are localized in English and Ukrainian via a vendored i18next.
 
 ## Commands
 
@@ -40,12 +40,14 @@ Signaling over WebSocket: `auth` → `webrtc_ready` → server sends `webrtc_off
 ### Core Modules (src/)
 
 - **`capture.ts`** — Spawns capture/encode child processes and forwards their RTP. macOS video: FFmpeg `screencapturekit` input (macOS 15+/Darwin 23+) or `avfoundation`; if FFmpeg lacks SCK support it falls back to `sc-audio capture-screen` (raw NV12) piped into an FFmpeg encoder. Windows: `ddagrab` or `gdigrab` + best available H.264 encoder (NVENC → AMF → QSV → libx264). Audio: `sc-audio capture` → FFmpeg libopus (macOS) or WASAPI loopback (Windows). Emits `videoRtp`/`audioRtp` (Buffer), `restart` (callers must `server.resetConnections()`), `log`, `error`, and `fatal` (restart attempts exhausted — exponential backoff, max 6). Pipeline restarts are guarded against double-scheduling; child kills escalate SIGTERM → SIGKILL after 3s.
-- **`server.ts`** — `StreamServer`: HTTP server serves `viewer.html`/`.css`/`.js` from an exact-match allowlist; WebSocket server (64KB `maxPayload`) handles auth (per-IP throttle: 10 failures/60s), one `RTCPeerConnection` per viewer (repeated `webrtc_ready` is ignored), keyframe gating, viewer chat (rate limit 5 msgs/5s per viewer), `maxViewers` enforced both at connect and again before registering a finished peer connection.
+- **`server.ts`** — `StreamServer`: HTTP server serves the viewer page and its assets from an exact-match allowlist (`viewer.html`, `/styles/*.css`, `/js/*.js`, `/fonts/*.woff2`, `/assets/icon-128.png`, `/i18n-dom.js`, `/vendor/i18next.min.js`, `/locales/{en,uk}.json` — anything else is 404); WebSocket server (64KB `maxPayload`) handles auth (per-IP throttle: 10 failures/60s), one `RTCPeerConnection` per viewer (repeated `webrtc_ready` is ignored), keyframe gating, viewer chat (rate limit 5 msgs/5s per viewer), `maxViewers` enforced both at connect and again before registering a finished peer connection.
 - **`auth.ts`** — WebSocket auth: first message must be `{"type":"auth","password":"..."}` within 5s timeout; comparison is constant-time (sha256 + `timingSafeEqual`). Passwords are 12 hex chars by default.
 - **`tunnel.ts`** — Wraps `cloudflared tunnel --url`. Emits `error`/`close` only to subscribers (guarded emit); 30s startup timeout kills the process.
 - **`constants.ts`** — `Config` interface and `DEFAULTS` (fps, bitrate/maxrate/bufsize, gopSize, maxViewers, passwordLength, STUN/TURN `iceServers`). The very high default bitrates (~100 Mbps) are intentional for LAN streaming.
 - **`audio-setup.ts`** — Resolves the `sc-audio` binary path (dev vs packaged Electron), lists apps for per-app audio capture.
-- **`viewer.html`/`.css`/`.js`** — Browser viewer: WebRTC playback into a `<video>`, password auth (auto-connect via `#password` URL hash), auto-reconnect with exponential backoff (single pending timer), mute toggle, stats overlay (rendered via `textContent` — never `innerHTML`), chat UI. CSP meta tag; no inline event handlers.
+- **Viewer page** — `viewer.html` at `src/` root; CSS split under `src/styles/` (`tokens.css`, `viewer-base.css`, `viewer-player.css`, `viewer-chat.css`), JS under `src/js/` (`viewer.js`, `viewer-chat.js`, `viewer-stats.js`). WebRTC playback into a `<video>`, password auth (auto-connect via `#password` URL hash), auto-reconnect with exponential backoff (single pending timer), mute toggle, stats overlay (rendered via `textContent` — never `innerHTML`), chat UI, language selector. CSP meta tag; no inline event handlers.
+- **i18n** — `src/locales/en.json`/`uk.json` (nested keys: `ui.*` for the Electron panel, `viewer.*` for the browser, `common.*` shared); `src/i18n-dom.js` exposes globals `applyI18n(root)` (translates `data-i18n*` attributes) and `pickLanguage()` (saved `localStorage['screencast:lang']` → `uk`-prefixed system locale → `en`); `src/vendor/i18next.min.js` is a vendored UMD global (both UIs are unbundled). The viewer fetches locale JSON over HTTP; the Electron UI can't `fetch()` under `file://`, so the `i18n:get` IPC handler in `electron/main.ts` reads locale JSON from disk and returns `{locale, resources}` (cached).
+- **Shared design assets** — `src/styles/tokens.css` is the single source of design tokens and `@font-face` rules, used by both the viewer and the Electron UI; `src/fonts/` holds self-hosted woff2 (Inter 400/500/600/700, Manrope 600/700); `src/assets/icon-128.png` is the brand icon.
 
 ### Swift Helper (swift/sc-audio/)
 
@@ -55,18 +57,20 @@ A Swift Package using ScreenCaptureKit. Despite the name it does both audio and 
 - `capture-screen --display <idx> --fps <n>` — raw NV12 frames on stdout (JSON `{"width","height"}` header line on stderr) — the video fallback when FFmpeg lacks SCK
 - `list` — running apps as JSON
 
+Both `capture` and `capture-screen` accept `--output <path>` to write to a file/FIFO instead of stdout.
+
 ### Electron App (electron/)
 
-- **`main.ts`** — Main process. Window, tray, single-instance lock, IPC handlers (`stream:start/stop/get-status/set-chat`, `devices:list`, `audio:list-apps`, `screen:get-sources`, `clipboard:copy`, `system:check-readiness`, `system:auto-setup`). Renderer-supplied config is clamped/validated in the main process. `startStream` has a re-entry guard and cleans up (server/capture/tunnel) if any startup step throws. `desktopCapturer` runs here (sandboxed preloads can't access it) — exposed via `screen:get-sources`. Prepends Homebrew paths to `PATH` since macOS GUI apps don't inherit shell PATH.
+- **`main.ts`** — Main process. Window, tray, single-instance lock, IPC handlers (`stream:start/stop/get-status/set-chat/send-chat/clear-error`, `devices:list`, `audio:list-apps`, `screen:get-sources`, `clipboard:copy`, `system:check-readiness`, `system:auto-setup`, `i18n:get`). Renderer-supplied config is clamped/validated in the main process. `StreamStatus` carries `startedAt` and `health` (`good | recovering | degraded`): a capture `restart` sets `recovering` (settles back to `good` after 10s), capture error/fatal sets `degraded`. `startStream` has a re-entry guard and cleans up (server/capture/tunnel) if any startup step throws. `desktopCapturer` runs here (sandboxed preloads can't access it) — exposed via `screen:get-sources`. Prepends Homebrew paths to `PATH` since macOS GUI apps don't inherit shell PATH.
 - **`preload.cts`** — CommonJS preload script (required by Electron). Exposes `window.api` via `contextBridge`; pure `ipcRenderer.invoke` bridge, no Electron modules used directly.
-- **`ui/`** — Static HTML/CSS/JS control panel (not TypeScript, not bundled). CSP meta tag; event listeners bound in `app.js`, no inline handlers.
+- **`ui/`** — Static HTML/CSS/JS control panel (not TypeScript, not bundled); CSS in `css/`, JS in `js/`. Shares `tokens.css`, fonts, and `i18n-dom.js` from `src/` (copied in at build time); vendored `ui/vendor/qrcode.js` renders the share-URL QR code. CSP meta tag; event listeners bound in JS, no inline handlers.
 
 ### Build
 
 - `tsc` compiles `bin/`, `src/`, `electron/` TypeScript to `dist/`
 - `esbuild` bundles `electron/main.ts` into a single CJS file (`dist/electron/main.cjs`) since Electron doesn't support ESM main
 - `swift build -c release` in `swift/sc-audio/` produces the `sc-audio` binary (shipped via electron-builder `extraResources`)
-- `scripts/copy-assets.sh` copies viewer files and Electron UI static files to `dist/`
+- `scripts/copy-assets.sh` — `copy_viewer()` copies the full viewer asset set (html, `styles/`, `js/`, `fonts/`, `assets/`, `locales/`, `vendor/`, `i18n-dom.js`) into BOTH `dist/src` (CLI) and `dist/electron` (packaged app), since the HTTP server serves from its own `__dirname`; then assembles the Electron control-panel UI in `dist/electron/ui/`, pulling shared `tokens.css`/fonts/icon/`i18n-dom.js` from `src/`
 - The project uses ESM (`"type": "module"`) with Node16 module resolution; imports use `.js` extensions
 
 ### Key Conventions
@@ -74,5 +78,6 @@ A Swift Package using ScreenCaptureKit. Despite the name it does both audio and 
 - Node.js >= 20, macOS 13+ (for ScreenCaptureKit)
 - Private class fields (`#field`) used throughout for encapsulation
 - Dependencies are minimal: `werift`, `werift-rtp`, `ws`, `commander` (runtime); `typescript`, `tsx`, `esbuild`, `electron`, `electron-builder` (dev)
-- No framework for the viewer page or Electron UI — plain HTML/CSS/JS
+- No framework or bundler for the viewer page or Electron UI — plain HTML/CSS/JS with two vendored libs loaded as globals (`i18next`, `qrcode.js`)
 - Untrusted input is validated at every boundary: CLI flags, renderer IPC config, WebSocket JSON; server-sent values are rendered with `textContent` in both UIs
+- `README.md` describes the old pre-WebRTC architecture (MSE/mp4frag over WebSocket) and is outdated — trust this file and the code over the README

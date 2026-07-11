@@ -199,6 +199,7 @@ interface StreamConfig {
 }
 
 type TunnelStatus = 'off' | 'starting' | 'up' | 'failed' | 'down';
+type StreamHealth = 'good' | 'recovering' | 'degraded';
 
 interface StreamStatus {
   running: boolean;
@@ -211,6 +212,8 @@ interface StreamStatus {
   chatEnabled: boolean;
   tunnelStatus: TunnelStatus;
   phase: string | null;
+  startedAt: number | null;
+  health: StreamHealth | null;
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -230,7 +233,31 @@ let status: StreamStatus = {
   chatEnabled: true,
   tunnelStatus: 'off',
   phase: null,
+  startedAt: null,
+  health: null,
 };
+
+let healthRecoveryTimer: NodeJS.Timeout | null = null;
+
+function setHealth(health: StreamHealth): void {
+  if (healthRecoveryTimer) {
+    clearTimeout(healthRecoveryTimer);
+    healthRecoveryTimer = null;
+  }
+  status.health = health;
+  if (health === 'recovering') {
+    // Capture pipeline is restarting; assume it settles unless another
+    // restart or error arrives within the window.
+    healthRecoveryTimer = setTimeout(() => {
+      healthRecoveryTimer = null;
+      if (status.running && status.health === 'recovering') {
+        status.health = 'good';
+        pushStatus();
+      }
+    }, 10_000);
+  }
+  pushStatus();
+}
 
 function pushStatus(): void {
   mainWindow?.webContents.send('stream:status-update', status);
@@ -453,11 +480,15 @@ async function doStartStream(config: StreamConfig): Promise<void> {
   });
   capture.on('videoRtp', (packet) => server?.pushVideoRtp(packet));
   capture.on('audioRtp', (packet) => server?.pushAudioRtp(packet));
-  capture.on('restart', () => server?.resetConnections());
+  capture.on('restart', () => {
+    server?.resetConnections();
+    if (status.running) setHealth('recovering');
+  });
   capture.on('error', (err: Error) => {
     console.error('[main] capture error:', err.message);
     status.error = `FFmpeg: ${err.message}`;
-    pushStatus();
+    if (status.running) setHealth('degraded');
+    else pushStatus();
   });
   capture.on('fatal', (err: Error) => {
     console.error('[main] capture fatal:', err.message);
@@ -473,7 +504,8 @@ async function doStartStream(config: StreamConfig): Promise<void> {
     if (/unknown input format|Error opening input file/i.test(msg)) return;
     if (/error|fatal|denied|permission|library not loaded|dyld\[/i.test(msg)) {
       status.error = `FFmpeg: ${msg}`;
-      pushStatus();
+      if (status.running) setHealth('degraded');
+      else pushStatus();
     }
   });
   console.log(`[main] calling capture.start(${screenIndex}, ${JSON.stringify(audioConfig)})`);
@@ -517,6 +549,8 @@ async function doStartStream(config: StreamConfig): Promise<void> {
     chatEnabled: config.chat !== false,
     tunnelStatus,
     phase: null,
+    startedAt: Date.now(),
+    health: 'good',
   };
 
   pushStatus();
@@ -530,6 +564,11 @@ function stopStream(): void {
   server = null;
   tunnelInstance = null;
 
+  if (healthRecoveryTimer) {
+    clearTimeout(healthRecoveryTimer);
+    healthRecoveryTimer = null;
+  }
+
   status = {
     ...status,
     running: false,
@@ -540,6 +579,8 @@ function stopStream(): void {
     error: null,
     tunnelStatus: 'off',
     phase: null,
+    startedAt: null,
+    health: null,
   };
   pushStatus();
 }
@@ -560,7 +601,7 @@ function createWindow(): void {
     maximizable: false,
     icon: path.join(getResourcesPath(), 'icon.png'),
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
-    backgroundColor: '#0a0a0a',
+    backgroundColor: '#0b1326',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,

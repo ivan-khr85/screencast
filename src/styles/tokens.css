@@ -1,0 +1,126 @@
+/*
+ * Luminous Dark design tokens — shared by the Electron control panel and the
+ * browser viewer. Single source of truth: copy-assets.sh fans this file out to
+ * dist/src/styles/, dist/electron/styles/ and dist/electron/ui/css/.
+ * Font files resolve relative to this stylesheet's directory (../fonts/).
+ */
+
+@font-face {
+  font-family: "Manrope";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("../fonts/manrope-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Manrope";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("../fonts/manrope-700.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../fonts/inter-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("../fonts/inter-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("../fonts/inter-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("../fonts/inter-700.woff2") format("woff2");
+}
+
+:root {
+  /* Surfaces */
+  --surface: #0b1326;
+  --surface-container-lowest: #060e20;
+  --surface-container-low: #131b2e;
+  --surface-container: #171f33;
+  --surface-container-high: #222a3d;
+  --surface-container-highest: #2d3449;
+  --surface-bright: #31394d;
+
+  /* Text */
+  --on-surface: #dae2fd;
+  --on-surface-variant: #c7c4d7;
+  --outline: #908fa0;
+  --outline-variant: #464554;
+
+  /* Primary (indigo) */
+  --primary: #c0c1ff;
+  --on-primary: #1000a9;
+  --primary-container: #8083ff;
+  --primary-fixed: #e1e0ff;
+
+  /* Secondary (violet) */
+  --secondary: #ddb7ff;
+  --secondary-container: #6f00be;
+  --on-secondary-container: #d6a9ff;
+
+  /* Tertiary (rose) */
+  --tertiary: #ffb2bb;
+  --tertiary-container: #cb7984;
+  --on-tertiary-container: #4e1521;
+
+  /* Error / destructive */
+  --error: #ffb4ab;
+  --on-error: #690005;
+  --error-container: #93000a;
+
+  /* Semantic extras */
+  --success: #81c995;
+  --warn: #f5c97b;
+
+  /* Hairlines & glass */
+  --hairline: rgba(255, 255, 255, 0.08);
+  --hairline-strong: rgba(255, 255, 255, 0.12);
+  --glass-bg: rgba(11, 19, 38, 0.8);
+  --glow: rgba(128, 131, 255, 0.08);
+
+  /* Shape */
+  --radius-sm: 8px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+
+  /* Type */
+  --font-display: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "SF Mono", Menlo, Consolas, monospace;
+
+  /* Shadows */
+  --shadow-cta: 0 8px 32px rgba(192, 193, 255, 0.15);
+  --shadow-card: 0 8px 32px rgba(6, 14, 32, 0.35);
+
+  /* Back-compat aliases (legacy names used across both UIs) */
+  --bg: var(--surface);
+  --panel: var(--surface-container);
+  --border: var(--outline-variant);
+  --border-soft: rgba(70, 69, 84, 0.6);
+  --text: var(--on-surface);
+  --text-dim: var(--on-surface-variant);
+  --muted: var(--outline);
+  --accent: var(--primary);
+  --accent-hover: var(--primary-fixed);
+  --success-hover: #6db583;
+  --danger: var(--error);
+  --danger-hover: #ff9a8f;
+  --radius: var(--radius-md);
+}

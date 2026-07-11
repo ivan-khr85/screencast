@@ -5,17 +5,31 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Screencast</title>
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/components.css">
+<link rel="stylesheet" href="css/idle.css">
+<link rel="stylesheet" href="css/live.css">
 </head>
 <body>
 
-<div class="titlebar">Screencast</div>
+<div class="ambient-glow" aria-hidden="true"></div>
 
-<div class="container">
+<header class="titlebar">
+  <div class="brand">
+    <img src="assets/icon-128.png" alt="" class="brand-icon">
+    <span class="brand-name">Screencast</span>
+  </div>
+  <button id="settings-gear" class="icon-btn no-drag" aria-label="Advanced Settings" data-i18n-aria-label="ui.settings.advanced" data-i18n-title="ui.settings.advanced" title="Advanced Settings">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+  </button>
+</header>
+
+<main class="container">
 
   <!-- First-run setup (shown when dependencies are missing) -->
   <div id="setup" class="hidden">
-    <div class="section">
+    <section class="card setup-card">
       <div class="section-title" data-i18n="ui.setup.title">Setup Required</div>
       <ul id="setup-checklist" class="setup-checklist"></ul>
       <div class="setup-actions">
@@ -23,12 +37,47 @@
         <button id="setup-recheck" class="btn-small" data-i18n="ui.setup.recheck">Re-check</button>
       </div>
       <div id="setup-log" class="setup-log hidden" aria-live="polite"></div>
-    </div>
+    </section>
   </div>
 
-  <!-- Settings -->
-  <div id="settings">
-    <div class="section">
+  <!-- Idle hero -->
+  <section id="hero" class="hero">
+    <div id="ready-pill" class="status-pill pill-ready">
+      <span class="pill-dot" aria-hidden="true"></span>
+      <span id="ready-pill-text" data-i18n="ui.hero.ready">System Ready</span>
+    </div>
+    <h1 class="hero-headline" data-i18n="ui.hero.headline">Ready to Stream</h1>
+  </section>
+
+  <!-- Control Button -->
+  <button id="startBtn" class="btn btn-start">
+    Start Stream
+  </button>
+  <div id="start-hint" class="start-hint hidden"></div>
+
+  <div id="error" class="error hidden" aria-live="polite"></div>
+
+  <!-- Public Access card (idle) -->
+  <section id="public-access-card" class="card public-access-card">
+    <div class="pa-text">
+      <span class="pa-label" id="tunnel-label" data-i18n="ui.settings.publicAccess">Public Access</span>
+      <span class="pa-desc" data-i18n="ui.settings.publicAccessDesc">Allow viewers to join over the internet</span>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="tunnel" checked aria-labelledby="tunnel-label">
+      <span class="slider"></span>
+    </label>
+  </section>
+  <div id="tunnel-note" class="field-note hidden" data-i18n="ui.settings.tunnelNote">Install cloudflared to enable public sharing</div>
+
+  <button id="advanced-toggle" class="btn-ghost" aria-expanded="false" aria-controls="settings">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+    <span data-i18n="ui.settings.advanced">Advanced Settings</span>
+  </button>
+
+  <!-- Advanced settings (hidden by default) -->
+  <div id="settings" class="hidden">
+    <section class="card">
       <div class="section-title" data-i18n="ui.settings.title">Settings</div>
       <div class="field">
         <label for="langSelect" data-i18n="common.language">Language</label>
@@ -97,85 +146,70 @@
         </select>
       </div>
       <div class="field">
-        <span class="field-label" id="tunnel-label" data-i18n="ui.settings.tunnel">Public Tunnel</span>
-        <label class="toggle">
-          <input type="checkbox" id="tunnel" checked aria-labelledby="tunnel-label">
-          <span class="slider"></span>
-        </label>
-      </div>
-      <div id="tunnel-note" class="field-note hidden" data-i18n="ui.settings.tunnelNote">Install cloudflared to enable public sharing</div>
-      <div class="field">
         <span class="field-label" id="chat-label" data-i18n="ui.chat">Chat</span>
         <label class="toggle">
           <input type="checkbox" id="chat" checked aria-labelledby="chat-label">
           <span class="slider"></span>
         </label>
       </div>
-    </div>
+    </section>
   </div>
-
-  <!-- Control Button -->
-  <button id="startBtn" class="btn btn-start">
-    Start Stream
-  </button>
-  <div id="start-hint" class="start-hint hidden"></div>
-
-  <div id="error" class="error hidden" aria-live="polite"></div>
 
   <!-- Stream Info (shown when streaming) -->
   <div id="stream-info" class="hidden">
+
+    <section class="card stats-card">
+      <div class="stats-top">
+        <span class="live-pill">
+          <span class="pill-dot pill-dot-red" aria-hidden="true"></span>
+          <span data-i18n="ui.live.live">LIVE</span>
+        </span>
+        <button id="share-open" class="icon-btn glass-btn no-drag" aria-label="Share stream" data-i18n-aria-label="ui.live.share">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="8.59" y1="10.49" x2="15.42" y2="6.51"/></svg>
+        </button>
+      </div>
+      <div class="stat stat-timer-block">
+        <div class="stat-label" data-i18n="ui.live.timeLive">Time Live</div>
+        <div id="stream-timer" class="stat-timer">00:00:00</div>
+      </div>
+      <div class="stats-row" role="status">
+        <div class="stat">
+          <div class="stat-label">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            <span data-i18n="ui.info.viewers">Viewers</span>
+          </div>
+          <div id="viewer-count" class="stat-value">0 / 5</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            <span data-i18n="ui.live.health">Health</span>
+          </div>
+          <div id="stream-health" class="stat-value health-good"></div>
+        </div>
+      </div>
+    </section>
+
     <div id="stream-warning" class="stream-warning hidden" aria-live="polite">
       <span id="stream-warning-text"></span>
       <button id="stream-warning-dismiss" aria-label="Dismiss warning" data-i18n-aria-label="ui.info.dismissWarning">&times;</button>
     </div>
 
-    <div class="section section-gap">
-      <div class="section-title" data-i18n="ui.info.title">Stream Info</div>
-      <div class="info-row">
-        <span class="info-label" data-i18n="ui.info.url">URL</span>
-        <span id="stream-url" class="info-value"></span>
-        <button class="btn-copy" data-copy="url" data-i18n="common.copy">Copy</button>
-      </div>
-      <div id="tunnel-badge" class="tunnel-badge hidden"></div>
-      <div class="info-row">
-        <span class="info-label" data-i18n="ui.info.password">Password</span>
-        <span id="stream-password" class="info-value"></span>
-        <button class="btn-copy" data-copy="password" data-i18n="common.copy">Copy</button>
-      </div>
-      <div class="info-row info-row-center">
-        <button class="btn-copy btn-copy-accent" data-copy="link" data-i18n="ui.info.copyLink">Copy Link (auto-connect)</button>
-        <button class="btn-copy" id="qr-toggle">Show QR</button>
-      </div>
-      <div id="qr-block" class="qr-block hidden">
-        <canvas id="qr-canvas" width="220" height="220" role="img" aria-label="QR code for stream link" data-i18n-aria-label="ui.info.qrAria"></canvas>
-        <label class="qr-include">
-          <input type="checkbox" id="qr-include-password" checked>
-          <span data-i18n="ui.info.qrInclude">Include password (auto-connect)</span>
-        </label>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="viewers-display" role="status">
-        <div id="viewer-count" class="viewers-count">0 / 5</div>
-        <div class="viewers-label" data-i18n="ui.info.viewers">Viewers</div>
-      </div>
-      <div class="field field-gap">
-        <span class="field-label" id="chat-live-label" data-i18n="ui.chat">Chat</span>
-        <label class="toggle">
-          <input type="checkbox" id="chat-live-toggle" checked aria-labelledby="chat-live-label">
+    <!-- Host chat panel -->
+    <section class="card chat-card" id="chat-section">
+      <div class="chat-card-header">
+        <button id="chat-header" class="chat-header" aria-expanded="false" aria-controls="chat-body">
+          <svg class="chat-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+          <span class="chat-header-title" data-i18n="ui.chatPanel.title">Live Chat</span>
+          <span id="chat-unread" class="chat-unread hidden">0</span>
+          <svg class="chat-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <label class="toggle toggle-sm" id="chat-live-toggle-wrap">
+          <input type="checkbox" id="chat-live-toggle" checked aria-labelledby="chat-label-live">
           <span class="slider"></span>
         </label>
+        <span id="chat-label-live" class="visually-hidden" data-i18n="ui.chat">Chat</span>
       </div>
-    </div>
-
-    <!-- Host chat panel -->
-    <div class="section" id="chat-section">
-      <button id="chat-header" class="chat-header" aria-expanded="false">
-        <span class="chat-header-title" data-i18n="ui.chat">Chat</span>
-        <span id="chat-unread" class="chat-unread hidden">0</span>
-        <span class="chat-chevron" aria-hidden="true">&#9662;</span>
-      </button>
       <div id="chat-body" class="hidden">
         <div id="chat-messages" class="chat-messages" role="log" aria-live="polite"></div>
         <div class="chat-input-row">
@@ -183,20 +217,60 @@
           <button id="chat-send" class="btn-small btn-accent" data-i18n="common.send">Send</button>
         </div>
       </div>
-    </div>
+    </section>
 
     <div id="audio-note" class="audio-note hidden" data-i18n="ui.info.audioNote">
       Audio capture unavailable
     </div>
   </div>
 
+</main>
+
+<!-- Share modal -->
+<div id="share-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="share-title">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h2 id="share-title" class="modal-title" data-i18n="ui.share.title">Share Stream</h2>
+      <button id="share-close" class="icon-btn" aria-label="Close" data-i18n-aria-label="ui.share.close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div id="qr-block" class="qr-block">
+      <div class="qr-frame">
+        <canvas id="qr-canvas" width="200" height="200" role="img" aria-label="QR code for stream link" data-i18n-aria-label="ui.info.qrAria"></canvas>
+      </div>
+      <div class="qr-scan-label" data-i18n="ui.share.scan">Scan to join</div>
+      <label class="qr-include">
+        <input type="checkbox" id="qr-include-password" checked>
+        <span data-i18n="ui.info.qrInclude">Include password (auto-connect)</span>
+      </label>
+    </div>
+    <div class="share-row">
+      <span class="info-label" data-i18n="ui.info.url">URL</span>
+      <span id="stream-url" class="info-value"></span>
+      <button class="btn-copy" data-copy="url" data-i18n="common.copy">Copy</button>
+    </div>
+    <div id="tunnel-badge" class="tunnel-badge hidden"></div>
+    <div class="share-row">
+      <span class="info-label" data-i18n="ui.info.password">Password</span>
+      <span id="stream-password" class="info-value"></span>
+      <button class="btn-copy" data-copy="password" data-i18n="common.copy">Copy</button>
+    </div>
+    <button class="btn-copy btn-copy-accent btn-copy-link" data-copy="link" data-i18n="ui.info.copyLink">Copy Link (auto-connect)</button>
+  </div>
 </div>
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-<script src="vendor/qrcode.js"></script>
 <script src="vendor/i18next.min.js"></script>
 <script src="i18n-dom.js"></script>
-<script src="app.js"></script>
+<script src="vendor/qrcode.js"></script>
+<script src="js/dom.js"></script>
+<script src="js/settings.js"></script>
+<script src="js/setup.js"></script>
+<script src="js/chat.js"></script>
+<script src="js/share.js"></script>
+<script src="js/stream.js"></script>
+<script src="js/init.js"></script>
 </body>
 </html>

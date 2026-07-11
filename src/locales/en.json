@@ -7,6 +7,27 @@
   },
   "ui": {
     "chat": "Chat",
+    "hero": {
+      "ready": "System Ready",
+      "actionNeeded": "Action Needed",
+      "headline": "Ready to Stream"
+    },
+    "live": {
+      "live": "LIVE",
+      "timeLive": "Time Live",
+      "health": "Health",
+      "share": "Share stream"
+    },
+    "health": {
+      "good": "Excellent",
+      "recovering": "Recovering",
+      "degraded": "Degraded"
+    },
+    "share": {
+      "title": "Share Stream",
+      "close": "Close",
+      "scan": "Scan to join"
+    },
     "setup": {
       "title": "Setup Required",
       "install": "Install missing",
@@ -51,7 +72,10 @@
       "selectApp": "Select app...",
       "loading": "Loading...",
       "tunnel": "Public Tunnel",
-      "tunnelNote": "Install cloudflared to enable public sharing"
+      "tunnelNote": "Install cloudflared to enable public sharing",
+      "publicAccess": "Public Access",
+      "publicAccessDesc": "Allow viewers to join over the internet",
+      "advanced": "Advanced Settings"
     },
     "start": {
       "start": "Start Stream",
@@ -79,8 +103,6 @@
       "url": "URL",
       "password": "Password",
       "copyLink": "Copy Link (auto-connect)",
-      "showQr": "Show QR",
-      "hideQr": "Hide QR",
       "qrInclude": "Include password (auto-connect)",
       "qrAria": "QR code for stream link",
       "displayPreview": "Preview of selected display",
@@ -95,6 +117,7 @@
       "tunnelDown": "Public tunnel went down — sharing the LAN URL now"
     },
     "chatPanel": {
+      "title": "Live Chat",
       "messagePh": "Message viewers...",
       "messageAria": "Chat message"
     }
@@ -163,6 +186,10 @@
     },
     "chat": {
       "open": "Chat",
+      "title": "Live Chat",
+      "welcomeTitle": "Welcome!",
+      "welcomeBody": "Introduce yourself and join the conversation.",
+      "needName": "You need a display name to chat.",
       "namePh": "Enter your name...",
       "nameAria": "Chat name",
       "join": "Join",
