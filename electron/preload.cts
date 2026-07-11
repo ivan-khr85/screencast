@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('api', {
 
   setChat: (enabled: boolean) => ipcRenderer.invoke('stream:set-chat', enabled),
 
+  setDebug: (enabled: boolean) => ipcRenderer.invoke('stream:set-debug', enabled),
+
   clearError: () => ipcRenderer.invoke('stream:clear-error'),
 
   sendChatMessage: (text: string) => ipcRenderer.invoke('stream:send-chat', text),

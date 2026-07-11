@@ -40,8 +40,20 @@
   let reconnectTimer = null;
   let password = '';
   let authenticated = false;
-  let streamInfo = { viewers: null, maxViewers: null };
+  let streamInfo = { viewers: null, maxViewers: null, fps: null, bitrate: null };
   let streamEnded = false;
+
+  // Media transport. 'webrtc' is the low-latency default; 'ws' streams fMP4
+  // over the signaling WebSocket (MSE) for networks where the direct UDP
+  // path can't be established (strict NAT/firewall behind the tunnel).
+  // ?ws=1 forces the fallback from the start (the hash carries the password).
+  let transport = 'webrtc';
+  let preferFallback = new URLSearchParams(location.search).get('ws') === '1';
+  let webrtcFailCycles = 0; // survives reconnects — breaks the retry loop
+  let fallbackTimer = null;
+  let pendingCandidates = []; // server candidates that raced the offer
+  let remoteDescSet = false;
+  let lastMessageAt = Date.now(); // watchdog: server pings every 25s
 
   let isMuted = true; // Start muted (browser autoplay policy)
   let hasAudio = false;
@@ -72,8 +84,31 @@
     getPc: () => pc,
     isAuthenticated: () => authenticated,
     getStreamInfo: () => streamInfo,
+    getTransport: () => transport,
     savePrefs,
     visible: initialStatsVisible,
+  });
+  Viewer.mse.init({
+    onFatal: () => {
+      // This browser can't play the fallback stream either — nothing left.
+      showError('viewer.errors.firewall');
+      showOverlay('viewer.overlay.unable', 'viewer.overlay.unableMsg');
+    },
+  });
+  Viewer.debug.init({
+    t,
+    getState: () => ({
+      pc,
+      transport,
+      authenticated,
+      wsReadyState: ws ? ['connecting', 'open', 'closing', 'closed'][ws.readyState] : 'none',
+      reconnectAttempt,
+      webrtcFailCycles,
+      preferFallback,
+      lastMessageAgeMs: Date.now() - lastMessageAt,
+      streamInfo,
+      hasAudio,
+    }),
   });
 
   function logTrackStats() {
@@ -157,6 +192,17 @@
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     return `${proto}//${location.host}`;
   }
+
+  // Watchdog: the server sends a JSON ping every 25s, so a long silence
+  // means the socket is dead even if the TCP stack hasn't noticed (sleep,
+  // network switch, tunnel drop). Recycle it through the reconnect path.
+  setInterval(() => {
+    if (authenticated && ws && ws.readyState === WebSocket.OPEN &&
+        Date.now() - lastMessageAt > 60000) {
+      console.warn('[viewer] no server messages for 60s — recycling connection');
+      ws.close();
+    }
+  }, 10000);
 
   // Mute / volume
   const muteToggle = document.getElementById('mute-toggle');
@@ -310,13 +356,40 @@
     connect();
   });
 
+  function clearFallbackTimer() {
+    if (fallbackTimer) {
+      clearTimeout(fallbackTimer);
+      fallbackTimer = null;
+    }
+  }
+
   function cleanupPeerConnection() {
+    clearFallbackTimer();
+    pendingCandidates = [];
+    remoteDescSet = false;
     if (pc) {
       pc.close();
       pc = null;
     }
     video.srcObject = null;
+    if (Viewer.mse) Viewer.mse.reset();
     Viewer.stats.resetMeasured();
+  }
+
+  // WebRTC could not connect (ICE failed or timed out) — switch this session
+  // to the fMP4-over-WebSocket transport. The signaling socket is still open;
+  // sticky via preferFallback so later reconnects skip the doomed retry.
+  function switchToFallback() {
+    if (transport === 'ws' || streamEnded) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    transport = 'ws';
+    preferFallback = true;
+    webrtcFailCycles++;
+    console.warn('[viewer] WebRTC failed — switching to WebSocket media fallback');
+    cleanupPeerConnection();
+    showError('viewer.errors.webrtcFallback', true);
+    showLoading('viewer.loading.waiting');
+    sendJson({ type: 'transport_fallback' });
   }
 
   function connect() {
@@ -334,16 +407,24 @@
 
     setStatus('viewer.status.connecting', 'reconnecting');
     ws = new WebSocket(getWsUrl());
+    ws.binaryType = 'arraybuffer'; // fMP4 fallback segments arrive as binary
     authenticated = false;
     hasAudio = false;
-    streamInfo = { viewers: null, maxViewers: null };
+    transport = preferFallback ? 'ws' : 'webrtc';
+    streamInfo = { viewers: null, maxViewers: null, fps: null, bitrate: null };
     Viewer.chat.resetForConnect();
 
     ws.onopen = () => {
+      lastMessageAt = Date.now();
       ws.send(JSON.stringify({ type: 'auth', password: password }));
     };
 
     ws.onmessage = (event) => {
+      lastMessageAt = Date.now();
+      if (event.data instanceof ArrayBuffer) {
+        if (authenticated) handleBinaryFrame(event.data);
+        return;
+      }
       if (!authenticated) {
         handleAuthResponse(event.data);
         return;
@@ -378,6 +459,13 @@
         showError('viewer.errors.restarting', true);
       } else if (e.code === 4011) {
         showError('viewer.errors.videoInterrupted');
+        // Repeated WebRTC timeouts (server closes 4011) used to loop forever:
+        // reconnect → new offer → 35s timeout → 4011 → … After two cycles,
+        // go straight to the WebSocket fallback on the next connect.
+        if (transport === 'webrtc') {
+          webrtcFailCycles++;
+          if (webrtcFailCycles >= 2) preferFallback = true;
+        }
       } else if (authenticated && e.code !== 1000) {
         showError('viewer.errors.lost');
       }
@@ -405,8 +493,13 @@
         setTimeout(() => setStatus('', ''), 2000);
         showLoading('viewer.loading.waiting');
         showControls();
-        // Tell server we're ready for WebRTC
-        ws.send(JSON.stringify({ type: 'webrtc_ready' }));
+        if (transport === 'ws') {
+          // Fallback transport (forced via ?ws=1 or sticky after WebRTC failures)
+          ws.send(JSON.stringify({ type: 'transport_fallback' }));
+        } else {
+          // Tell server we're ready for WebRTC
+          ws.send(JSON.stringify({ type: 'webrtc_ready' }));
+        }
         // Restore the chat name after a reconnect so the user
         // doesn't have to re-join mid-session
         Viewer.chat.resendName();
@@ -437,7 +530,34 @@
       const msg = JSON.parse(data);
       if (msg.type === 'webrtc_offer') {
         handleWebRTCOffer(msg.sdp, msg.iceServers);
+      } else if (msg.type === 'ice_candidate') {
+        // Trickled server candidate. Queue until setRemoteDescription lands.
+        if (!pc || !msg.candidate) return;
+        if (!remoteDescSet) {
+          pendingCandidates.push(msg.candidate);
+        } else {
+          pc.addIceCandidate(msg.candidate).catch(() => {});
+        }
+      } else if (msg.type === 'ice_complete') {
+        // Browsers cope fine without an explicit end-of-candidates signal.
+      } else if (msg.type === 'ping') {
+        // Server heartbeat — receiving it already fed the watchdog.
+      } else if (msg.type === 'fallback_start') {
+        if (Viewer.mse && typeof msg.mime === 'string') {
+          transport = 'ws';
+          Viewer.mse.reset();
+          Viewer.mse.start(msg.mime);
+        }
+      } else if (msg.type === 'fallback_unavailable') {
+        showError('viewer.errors.firewall');
+        showOverlay('viewer.overlay.unable', 'viewer.overlay.unableMsg');
+      } else if (msg.type === 'stream_restarting') {
+        // Capture pipeline is restarting in place — keep the socket, expect
+        // a fresh offer (webrtc) or a fresh init segment (ws) shortly.
+        if (authenticated && !streamEnded) showLoading('viewer.loading.waiting');
       } else if (msg.type === 'stream_info') {
+        streamInfo.fps = Number.isFinite(Number(msg.fps)) ? Number(msg.fps) : null;
+        streamInfo.bitrate = typeof msg.bitrate === 'string' ? msg.bitrate : null;
         if (msg.hasAudio) {
           hasAudio = true;
           audioControls.classList.add('available');
@@ -454,13 +574,26 @@
         Viewer.chat.addMessage(msg.sender, msg.message);
       } else if (msg.type === 'chat_enabled') {
         Viewer.chat.setEnabled(msg.enabled);
+      } else if (msg.type === 'debug_enabled') {
+        Viewer.debug.setEnabled(msg.enabled);
       } else if (msg.type === 'name_result') {
         Viewer.chat.onNameResult(msg);
       }
     } catch {}
   }
 
+  // Binary WS frames carry the fMP4 fallback stream: 1-byte type prefix
+  // (0x01 init segment, 0x02 media segment) + MP4 payload.
+  function handleBinaryFrame(data) {
+    if (!Viewer.mse || data.byteLength < 2) return;
+    const type = new Uint8Array(data, 0, 1)[0];
+    const payload = data.slice(1);
+    if (type === 0x01) Viewer.mse.appendInit(payload);
+    else if (type === 0x02) Viewer.mse.appendSegment(payload);
+  }
+
   async function handleWebRTCOffer(sdp, iceServers) {
+    if (transport === 'ws') return; // fallback already active — stale offer
     cleanupPeerConnection();
 
     const localPc = new RTCPeerConnection({
@@ -500,22 +633,34 @@
 
     localPc.onconnectionstatechange = () => {
       console.log('[viewer] connectionState:', localPc.connectionState);
+      if (localPc.connectionState === 'connected' && pc === localPc) {
+        clearFallbackTimer();
+      }
     };
 
     localPc.onicecandidateerror = (e) => {
       console.warn(`[viewer] ICE candidate error: ${e.url} — ${e.errorCode} ${e.errorText}`);
     };
 
+    // Trickle ICE: forward our candidates to the server as they're gathered.
+    localPc.onicecandidate = (e) => {
+      if (pc !== localPc) return;
+      if (e.candidate) sendJson({ type: 'ice_candidate', candidate: e.candidate.toJSON() });
+      else sendJson({ type: 'ice_complete' });
+    };
+
     localPc.oniceconnectionstatechange = () => {
       const state = localPc.iceConnectionState;
       console.log('[viewer] iceConnectionState:', state);
       if (state === 'failed') {
-        showError('viewer.errors.firewall');
-        setStatus('viewer.status.failed', 'error');
-        scheduleReconnect();
+        // Direct media path impossible — don't loop reconnects, switch to
+        // the WebSocket fallback on the still-open signaling socket.
+        setStatus('viewer.status.fallback', 'reconnecting');
+        switchToFallback();
       } else if (state === 'disconnected') {
         setStatus('viewer.status.reconnecting', 'reconnecting');
       } else if (state === 'connected' || state === 'completed') {
+        clearFallbackTimer();
         setStatus('', '');
         // Log inbound RTP stats after a short delay
         setTimeout(() => logTrackStats(), 3000);
@@ -524,40 +669,34 @@
 
     try {
       await localPc.setRemoteDescription({ type: 'offer', sdp: sdp });
+
+      // Bail out if this PC was replaced by a reconnect while we awaited
+      if (pc !== localPc) return;
+      remoteDescSet = true;
+      for (const c of pendingCandidates) localPc.addIceCandidate(c).catch(() => {});
+      pendingCandidates = [];
+
       const answer = await localPc.createAnswer();
       await localPc.setLocalDescription(answer);
-
-      // Wait for ICE gathering to complete (with timeout) so all candidates
-      // are in the SDP. werift requires candidates in the answer SDP.
-      const iceGatherStart = Date.now();
-      await new Promise((resolve) => {
-        if (localPc.iceGatheringState === 'complete') {
-          resolve();
-        } else {
-          const onState = () => {
-            if (localPc.iceGatheringState === 'complete') {
-              clearTimeout(timeout);
-              localPc.removeEventListener('icegatheringstatechange', onState);
-              console.log(`[viewer] ICE gathering complete in ${Date.now() - iceGatherStart}ms`);
-              resolve();
-            }
-          };
-          const timeout = setTimeout(() => {
-            localPc.removeEventListener('icegatheringstatechange', onState);
-            console.warn('[viewer] ICE gathering timed out after 5s, sending partial answer');
-            resolve();
-          }, 5000);
-          localPc.addEventListener('icegatheringstatechange', onState);
-        }
-      });
-
-      // Bail out if this PC was replaced by a reconnect while we were waiting
       if (pc !== localPc || !localPc.localDescription) return;
 
+      // Send the answer immediately, before ICE gathering finishes: werift
+      // latches on a=end-of-candidates in the SDP, so a "complete" answer
+      // would make it ignore every candidate we trickle afterwards.
       ws.send(JSON.stringify({
         type: 'webrtc_answer',
         sdp: localPc.localDescription.sdp,
       }));
+
+      // If WebRTC can't get connected quickly it likely never will (ICE can
+      // sit in "checking" for ages on hostile NATs) — arm the fallback.
+      clearFallbackTimer();
+      fallbackTimer = setTimeout(() => {
+        if (pc === localPc && localPc.connectionState !== 'connected') {
+          console.warn('[viewer] WebRTC not connected after 9s — falling back');
+          switchToFallback();
+        }
+      }, 9000);
     } catch (err) {
       console.error('[viewer] WebRTC setup failed:', err);
       showError('viewer.errors.playback');
@@ -604,6 +743,7 @@
     updateMuteIcon();
     syncFullscreenIcon();
     Viewer.stats.refresh();
+    Viewer.debug.refresh();
   }
 
   langSelects.forEach((s) => s.addEventListener('change', () => setLanguage(s.value)));
@@ -631,6 +771,7 @@
     updateMuteIcon();
     syncFullscreenIcon();
     Viewer.stats.refresh();
+    Viewer.debug.refresh();
 
     // Auto-connect if password is in the URL hash
     const hashPassword = location.hash.slice(1);

@@ -19,25 +19,77 @@
     getPc: function () { return null; },
     isAuthenticated: function () { return false; },
     getStreamInfo: function () { return { viewers: null, maxViewers: null }; },
+    getTransport: function () { return 'webrtc'; },
     savePrefs: function () {},
   };
 
   let statsVisible = false;
 
-  // Measured playback stats (real fps/bitrate/loss from WebRTC, not the
-  // configured values the server advertises)
+  // Measured playback stats (real fps/bitrate/loss from WebRTC or MSE, not
+  // the configured values the server advertises)
   let lastRtp = null;
   let measured = { fps: null, kbps: null, lossPct: null, bufMs: null };
+  // 'WebRTC (host|srflx|relay)' or 'WS' — which media path is active
+  let transportLabel = null;
 
   function resetMeasuredStats() {
     lastRtp = null;
     measured = { fps: null, kbps: null, lossPct: null, bufMs: null };
+    transportLabel = null;
+  }
+
+  // Pick the connectivity flavor of the selected ICE pair: relay beats
+  // srflx beats host (a single relay leg makes the whole path relayed).
+  function pairFlavor(localType, remoteType) {
+    const types = [localType, remoteType];
+    if (types.includes('relay')) return 'relay';
+    if (types.includes('srflx') || types.includes('prflx')) return 'srflx';
+    if (types.includes('host')) return 'host';
+    return null;
   }
 
   setInterval(() => {
+    if (!statsVisible) return;
+
+    // WS fallback transport: numbers come from the MSE module.
+    if (deps.getTransport() === 'ws') {
+      if (window.Viewer && Viewer.mse && Viewer.mse.isActive()) {
+        const s = Viewer.mse.getStats();
+        measured.fps = s.fps;
+        measured.kbps = s.kbps;
+        measured.bufMs = s.bufMs;
+        measured.lossPct = null;
+        transportLabel = 'WS';
+      }
+      return;
+    }
+
     const pc = deps.getPc();
-    if (!pc || !statsVisible) return;
+    if (!pc) return;
     pc.getStats().then((stats) => {
+      // Selected candidate pair → transport label
+      let selectedPairId = null;
+      let pairReport = null;
+      stats.forEach((report) => {
+        if (report.type === 'transport' && report.selectedCandidatePairId) {
+          selectedPairId = report.selectedCandidatePairId;
+        }
+      });
+      stats.forEach((report) => {
+        if (report.type !== 'candidate-pair') return;
+        if (report.id === selectedPairId) pairReport = report;
+        else if (!selectedPairId && !pairReport && (report.selected === true || (report.nominated && report.state === 'succeeded'))) pairReport = report;
+      });
+      if (pairReport) {
+        let localType = null;
+        let remoteType = null;
+        stats.forEach((report) => {
+          if (report.id === pairReport.localCandidateId) localType = report.candidateType;
+          if (report.id === pairReport.remoteCandidateId) remoteType = report.candidateType;
+        });
+        const flavor = pairFlavor(localType, remoteType);
+        transportLabel = flavor ? `WebRTC (${flavor})` : 'WebRTC';
+      }
       let bytes = 0;
       let frames = null;
       let lost = 0;
@@ -124,6 +176,10 @@
 
     if (measured.bufMs != null) {
       parts.push([measured.bufMs + ' ms', ' ' + deps.t('viewer.stats.buffer')]);
+    }
+
+    if (transportLabel) {
+      parts.push([deps.t('viewer.stats.via') + ' ' + transportLabel, '']);
     }
 
     const streamInfo = deps.getStreamInfo();

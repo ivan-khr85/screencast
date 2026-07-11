@@ -39,6 +39,7 @@
     tunnel: document.getElementById('tunnel'),
     tunnelNote: document.getElementById('tunnel-note'),
     chat: document.getElementById('chat'),
+    debugMenu: document.getElementById('debugMenu'),
 
     // stream controls / status
     startBtn: document.getElementById('startBtn'),

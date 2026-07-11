@@ -223,6 +223,13 @@ screencast/
 - Check that the maximum viewer limit hasn't been reached (default: 5)
 - For LAN mode, ensure viewers are on the same network
 
+**Remote viewers see an endless spinner**
+- The Cloudflare tunnel carries only the page and signaling; WebRTC media is a direct UDP path that some NATs/firewalls block
+- The viewer automatically falls back to streaming over the WebSocket itself (works through the tunnel anywhere, ~1–2 s latency) within ~10 s
+- Append `?ws=1` to the viewer URL to force that fallback from the start, e.g. `https://<name>.trycloudflare.com/?ws=1#<password>`
+- `--no-ws-fallback` disables the fallback; the viewer-side debug panel (toggleable from host settings, `--no-debug-menu` in the CLI) shows the active transport, ICE states and playback internals
+- When the tunnel is on, the default bitrate drops to 12 Mbps — set a custom bitrate if you need a different trade-off
+
 ## License
 
 MIT

@@ -17,6 +17,7 @@
       audioMode: els.audioMode.value,
       tunnel: els.tunnel.checked,
       chat: els.chat.checked,
+      debugMenu: els.debugMenu.checked,
       screenIndex: els.screenSelect.value,
     };
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(data)); } catch {}
@@ -34,6 +35,7 @@
     if (data.maxViewers) els.maxViewers.value = data.maxViewers;
     if (typeof data.tunnel === 'boolean') els.tunnel.checked = data.tunnel;
     if (typeof data.chat === 'boolean') els.chat.checked = data.chat;
+    if (typeof data.debugMenu === 'boolean') els.debugMenu.checked = data.debugMenu;
     if (data.audioMode && ['system', 'app', 'none'].includes(data.audioMode)) {
       els.audioMode.value = data.audioMode;
     }
@@ -46,6 +48,11 @@
   }
 
   els.settings.addEventListener('change', saveSettings);
+
+  // Viewer debug panel: applies live while streaming (mirrors the chat toggle).
+  els.debugMenu.addEventListener('change', () => {
+    if (state.streaming) window.api.setDebug(els.debugMenu.checked);
+  });
 
   // --- Quality presets ---
 
@@ -61,7 +68,7 @@
   // itself explicitly.
   els.tunnel.addEventListener('change', () => {
     if (els.tunnel.checked && els.quality.value === '100750k') {
-      els.quality.value = '20000k';
+      els.quality.value = '12000k';
       updateQualityVisibility();
     }
     saveSettings();

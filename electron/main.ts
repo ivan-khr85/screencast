@@ -195,6 +195,7 @@ interface StreamConfig {
   audioAppBundleId?: string;
   tunnel: boolean;
   chat: boolean;
+  debug: boolean;
   screenIndex?: string;
 }
 
@@ -210,6 +211,7 @@ interface StreamStatus {
   hasAudio: boolean;
   error: string | null;
   chatEnabled: boolean;
+  debugEnabled: boolean;
   tunnelStatus: TunnelStatus;
   phase: string | null;
   startedAt: number | null;
@@ -231,6 +233,7 @@ let status: StreamStatus = {
   hasAudio: false,
   error: null,
   chatEnabled: true,
+  debugEnabled: true,
   tunnelStatus: 'off',
   phase: null,
   startedAt: null,
@@ -387,6 +390,15 @@ async function doStartStream(config: StreamConfig): Promise<void> {
     config.bitrate = DEFAULTS.bitrate;
   }
 
+  // The ~100 Mbps default is a LAN preset; through an internet uplink it
+  // creates standing queues and loss. When the tunnel is on and the user
+  // left the bitrate at the LAN default, drop to a remote-friendly one
+  // (parity with the CLI). An explicit custom bitrate is respected.
+  if (config.tunnel && config.bitrate === DEFAULTS.bitrate) {
+    config.bitrate = '12000k';
+    console.log('[main] tunnel enabled: using remote-friendly bitrate 12000k');
+  }
+
   // DEFAULTS.maxrate/bufsize are tuned for the ~100 Mbps LAN preset; for any
   // other bitrate they would defeat the cap, so derive them from the target.
   let maxrate = DEFAULTS.maxrate;
@@ -451,6 +463,7 @@ async function doStartStream(config: StreamConfig): Promise<void> {
   });
   server.setHasAudio(audioConfig.mode !== 'none');
   server.setChatEnabled(config.chat !== false);
+  server.setDebugEnabled(config.debug !== false);
 
   // Register callbacks before listen() — a viewer connecting during startup
   // must not go uncounted.
@@ -481,7 +494,8 @@ async function doStartStream(config: StreamConfig): Promise<void> {
   capture.on('videoRtp', (packet) => server?.pushVideoRtp(packet));
   capture.on('audioRtp', (packet) => server?.pushAudioRtp(packet));
   capture.on('restart', () => {
-    server?.resetConnections();
+    // Renegotiate viewers in place — they keep their socket and auth.
+    server?.restartStreams();
     if (status.running) setHealth('recovering');
   });
   capture.on('error', (err: Error) => {
@@ -547,6 +561,7 @@ async function doStartStream(config: StreamConfig): Promise<void> {
     hasAudio: audioConfig.mode !== 'none',
     error: null,
     chatEnabled: config.chat !== false,
+    debugEnabled: config.debug !== false,
     tunnelStatus,
     phase: null,
     startedAt: Date.now(),
@@ -682,6 +697,12 @@ ipcMain.handle('stream:get-status', () => status);
 ipcMain.handle('stream:set-chat', (_event, enabled: boolean) => {
   server?.setChatEnabled(!!enabled);
   status.chatEnabled = !!enabled;
+  pushStatus();
+});
+
+ipcMain.handle('stream:set-debug', (_event, enabled: boolean) => {
+  server?.setDebugEnabled(!!enabled);
+  status.debugEnabled = !!enabled;
   pushStatus();
 });
 

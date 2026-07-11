@@ -21,6 +21,9 @@ export interface Config {
   authTimeout: number;
   passwordLength: number;
   iceServers: RTCIceServer[];
+  // Allow viewers to fall back to fMP4-over-WebSocket (MSE) when WebRTC
+  // can't connect (e.g. through the tunnel with an unfriendly NAT).
+  fallbackEnabled: boolean;
 }
 
 export function parseKbits(bitrate: string): number | null {
@@ -60,24 +63,15 @@ export const DEFAULTS: Config = {
   maxViewers: 5,
   authTimeout: 5000,
   passwordLength: 6, // bytes → 12 hex chars (~48 bits)
+  fallbackEnabled: true,
+  // STUN only. If you add a TURN server, mind werift's parseIceServers: it
+  // uses only the FIRST `stun:` and FIRST `turn:` entry, `urls` must be a
+  // string (not an array), `?transport=tcp` is ignored (TURN-over-TCP needs
+  // PeerConfig.forceTurnTCP) and `turns:` URLs are never matched. A dead TURN
+  // host stalls werift's setLocalDescription, so never list one speculatively.
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun2.l.google.com:19302" },
-    {
-      urls: "turn:openrelay.metered.ca:80",
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
-    {
-      urls: "turn:openrelay.metered.ca:443?transport=tcp",
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
-    {
-      urls: "turns:openrelay.metered.ca:443?transport=tcp",
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
   ],
 };

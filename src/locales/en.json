@@ -75,6 +75,7 @@
       "tunnelNote": "Install cloudflared to enable public sharing",
       "publicAccess": "Public Access",
       "publicAccessDesc": "Allow viewers to join over the internet",
+      "debugMenu": "Viewer debug panel",
       "advanced": "Advanced Settings"
     },
     "start": {
@@ -135,7 +136,8 @@
       "connected": "Connected",
       "reconnecting": "Reconnecting...",
       "reconnectingN": "Reconnecting… ({{count}})",
-      "failed": "Connection failed"
+      "failed": "Connection failed",
+      "fallback": "Compatibility mode"
     },
     "loading": {
       "waiting": "Waiting for video…",
@@ -155,7 +157,8 @@
       "lost": "Connection lost — reconnecting…",
       "problem": "Connection problem — reconnecting…",
       "firewall": "Could not establish a video connection. A firewall may be blocking it.",
-      "playback": "Could not start video playback — reconnecting…"
+      "playback": "Could not start video playback — reconnecting…",
+      "webrtcFallback": "Direct connection failed — switching to compatibility mode…"
     },
     "overlay": {
       "ended": "Stream has ended",
@@ -170,10 +173,16 @@
       "kbps": "kbps",
       "loss": "loss",
       "buffer": "buf",
+      "via": "via",
       "show": "Show statistics",
       "hide": "Hide statistics",
       "viewersSuffix_one": "viewer",
       "viewersSuffix_other": "viewers"
+    },
+    "debug": {
+      "open": "Debug info",
+      "title": "Debug",
+      "close": "Close"
     },
     "controls": {
       "group": "Player controls",

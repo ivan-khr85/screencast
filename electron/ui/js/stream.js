@@ -100,6 +100,7 @@
       els.streamPassword.textContent = status.password || '';
       els.viewerCount.textContent = `${status.viewers} / ${status.maxViewers}`;
       els.chatLiveToggle.checked = status.chatEnabled !== false;
+      els.debugMenu.checked = status.debugEnabled !== false;
 
       startTimer();
       renderHealth(status.health);
@@ -190,6 +191,7 @@
         audioAppBundleId: audioMode === 'app' ? els.audioApp.value : undefined,
         tunnel: els.tunnel.checked,
         chat: els.chat.checked,
+        debug: els.debugMenu.checked,
         screenIndex: els.screenSelect.value,
       };
 

@@ -112,7 +112,7 @@
         <label for="quality" data-i18n="ui.settings.quality">Quality</label>
         <select id="quality">
           <option value="100750k" selected data-i18n="ui.settings.qMax">Maximum (LAN)</option>
-          <option value="20000k" data-i18n="ui.settings.qHigh">High (remote)</option>
+          <option value="12000k" data-i18n="ui.settings.qHigh">High (remote)</option>
           <option value="8000k" data-i18n="ui.settings.qMedium">Medium</option>
           <option value="3000k" data-i18n="ui.settings.qLow">Low</option>
           <option value="custom" data-i18n="ui.settings.qCustom">Custom&hellip;</option>
@@ -151,6 +151,13 @@
         <span class="field-label" id="chat-label" data-i18n="ui.chat">Chat</span>
         <label class="toggle">
           <input type="checkbox" id="chat" checked aria-labelledby="chat-label">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="field">
+        <span class="field-label" id="debug-label" data-i18n="ui.settings.debugMenu">Viewer debug panel</span>
+        <label class="toggle">
+          <input type="checkbox" id="debugMenu" checked aria-labelledby="debug-label">
           <span class="slider"></span>
         </label>
       </div>

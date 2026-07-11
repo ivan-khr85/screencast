@@ -18,6 +18,8 @@ interface CliOptions {
   audioMode?: string;
   audioApp?: string;
   tunnel: boolean;
+  wsFallback: boolean;
+  debugMenu: boolean;
   listDevices?: boolean;
   listApps?: boolean;
   screen?: string;
@@ -35,6 +37,8 @@ program
   .option('--audio-mode <mode>', 'Audio mode: system, app, none (default: system)')
   .option('--audio-app <bundleID>', 'Bundle ID of app to capture audio from')
   .option('--no-tunnel', 'Disable cloudflared tunnel (LAN only)')
+  .option('--no-ws-fallback', 'Disable the fMP4-over-WebSocket fallback for viewers that cannot connect via WebRTC')
+  .option('--no-debug-menu', 'Hide the debug panel in the viewer page')
   .option('--list-devices', 'List available capture devices and exit')
   .option('--list-apps', 'List available apps for audio capture and exit')
   .option('--screen <index>', 'Display index to capture (0 = main, see --list-devices)');
@@ -95,8 +99,8 @@ const wantTunnel = opts.tunnel !== false;
 // is on and the user didn't choose a bitrate, drop to a remote-friendly one.
 let bitrate = opts.bitrate;
 if (wantTunnel && program.getOptionValueSource('bitrate') !== 'cli') {
-  bitrate = '20000k';
-  console.log('  Tunnel enabled: using remote-friendly bitrate 20000k (override with --bitrate, or --no-tunnel for LAN max)');
+  bitrate = '12000k';
+  console.log('  Tunnel enabled: using remote-friendly bitrate 12000k (override with --bitrate, or --no-tunnel for LAN max)');
 }
 
 // DEFAULTS.maxrate/bufsize only suit the default bitrate — derive otherwise.
@@ -152,8 +156,10 @@ const server = new StreamServer(password, {
   fps,
   bitrate,
   maxViewers,
+  fallbackEnabled: opts.wsFallback !== false,
 });
 server.setHasAudio(audioConfig.mode !== 'none');
+server.setDebugEnabled(opts.debugMenu !== false);
 await server.listen(port);
 
 // Start capture
@@ -168,7 +174,8 @@ capture.on('videoRtp', (packet) => server.pushVideoRtp(packet));
 capture.on('audioRtp', (packet) => server.pushAudioRtp(packet));
 
 capture.on('restart', () => {
-  server.resetConnections();
+  // Renegotiate viewers in place — they keep their socket and auth.
+  server.restartStreams();
 });
 
 capture.on('log', (msg) => {
