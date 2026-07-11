@@ -89,6 +89,9 @@ svg { display: block; }
   overflow-x: hidden;
 }
 
+/* Content must overflow into scroll, not compress the fixed-height flex column */
+.container > * { flex-shrink: 0; }
+
 .container::-webkit-scrollbar { width: 6px; }
 .container::-webkit-scrollbar-thumb {
   background: var(--surface-container-highest);

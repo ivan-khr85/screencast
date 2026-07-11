@@ -17,10 +17,12 @@ body.streaming .ambient-glow {
 body.streaming #stream-info:not(.hidden) { display: contents; }
 
 body.streaming .stats-card { order: 1; }
-body.streaming #startBtn { order: 2; margin-top: 2px; }
+body.streaming #startBtn { order: 2; margin-top: 2px; margin-bottom: 16px; }
 body.streaming #stream-warning { order: 3; }
 body.streaming #chat-section { order: 4; }
-body.streaming #audio-note { order: 5; }
+/* Trailing margin, not container padding: flex scroll containers drop
+   trailing padding, so the last item otherwise sits flush at the clip edge */
+body.streaming #audio-note { order: 5; margin-bottom: 24px; }
 body.streaming #error { order: 6; }
 
 /* --- Stats card --- */
