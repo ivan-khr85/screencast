@@ -334,8 +334,8 @@ function updateTrayMenu(): void {
   tray.setContextMenu(Menu.buildFromTemplate(template));
   tray.setToolTip(
     status.running
-      ? `Screencast - ${status.viewers} viewer${status.viewers !== 1 ? 's' : ''}`
-      : 'Screencast',
+      ? `iCast - ${status.viewers} viewer${status.viewers !== 1 ? 's' : ''}`
+      : 'iCast',
   );
 }
 
@@ -421,7 +421,7 @@ async function doStartStream(config: StreamConfig): Promise<void> {
         'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
       );
       throw new Error(
-        'Screen Recording permission is required. Grant access to Screencast in System Settings, then try again.',
+        'Screen Recording permission is required. Grant access to iCast in System Settings, then try again.',
       );
     }
     if (screenAccess === 'not-determined') {

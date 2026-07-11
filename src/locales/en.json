@@ -124,7 +124,7 @@
     }
   },
   "viewer": {
-    "title": "Screen Stream",
+    "title": "iCast",
     "auth": {
       "passwordPh": "Enter password",
       "passwordAria": "Stream password",

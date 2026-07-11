@@ -207,7 +207,7 @@ export class Capture extends EventEmitter {
       '-an',
     ];
 
-    const recordTo = process.env.SCREENCAST_RECORD_TO;
+    const recordTo = process.env.ICAST_RECORD_TO;
     if (recordTo) {
       // Debug: write encoded video to file instead of RTP to check for encoding artifacts.
       // WebRTC stream will be inactive. Open the file in VLC to inspect.
@@ -399,7 +399,7 @@ export class Capture extends EventEmitter {
       '-an',
     ];
 
-    const recordTo = process.env.SCREENCAST_RECORD_TO;
+    const recordTo = process.env.ICAST_RECORD_TO;
     if (recordTo) {
       ffmpegArgs.push('-f', 'matroska', recordTo);
       console.log(`[capture] DEBUG recording to ${recordTo} — WebRTC stream inactive`);
@@ -566,7 +566,7 @@ export class Capture extends EventEmitter {
       '-an',
     );
 
-    const recordTo = process.env.SCREENCAST_RECORD_TO;
+    const recordTo = process.env.ICAST_RECORD_TO;
     if (recordTo) {
       args.push('-f', 'matroska', recordTo);
       console.log(`[capture] DEBUG recording to ${recordTo} — WebRTC stream inactive`);
@@ -670,7 +670,7 @@ export class Capture extends EventEmitter {
     this.#audioEncoder = encoder;
 
     // Pipe sc-audio stdout → FFmpeg stdin (optionally tee to file for diagnosis)
-    const recordAudioTo = process.env.SCREENCAST_RECORD_AUDIO;
+    const recordAudioTo = process.env.ICAST_RECORD_AUDIO;
     if (recordAudioTo) {
       const fileStream = fs.createWriteStream(recordAudioTo);
       fileStream.on('error', (err: Error) => this.emit('log', `[sc-audio] record file error: ${err.message}`));

@@ -81,7 +81,7 @@ export class RemuxPipeline extends EventEmitter {
     const sdpLines = [
       "v=0",
       "o=- 0 0 IN IP4 127.0.0.1",
-      "s=screencast-remux",
+      "s=icast-remux",
       "c=IN IP4 127.0.0.1",
       "t=0 0",
       `m=video ${this.#videoPort} RTP/AVP ${opts.videoPt}`,
@@ -95,7 +95,7 @@ export class RemuxPipeline extends EventEmitter {
     }
     // FFmpeg's data: protocol support varies by build — a temp SDP file works
     // everywhere. The dir is removed on stop().
-    this.#sdpDir = fs.mkdtempSync(path.join(os.tmpdir(), "screencast-remux-"));
+    this.#sdpDir = fs.mkdtempSync(path.join(os.tmpdir(), "icast-remux-"));
     const sdpPath = path.join(this.#sdpDir, "stream.sdp");
     fs.writeFileSync(sdpPath, sdpLines.join("\n") + "\n");
 

@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; media-src 'self' blob:">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Screen Stream</title>
+<title>iCast</title>
+<link rel="icon" type="image/png" href="/assets/icon-128.png">
 <link rel="stylesheet" href="/styles/tokens.css">
 <link rel="stylesheet" href="/styles/viewer-base.css">
 <link rel="stylesheet" href="/styles/viewer-player.css">
@@ -18,12 +19,12 @@
      called on #player-screen, so the bar disappears in fullscreen. -->
 <header id="top-bar">
   <img src="/assets/icon-128.png" alt="" aria-hidden="true">
-  <span class="wordmark">Screencast</span>
+  <span class="wordmark">iCast</span>
 </header>
 
 <div id="auth-screen">
   <div class="auth-card">
-    <h1 data-i18n="viewer.title">Screen Stream</h1>
+    <h1 data-i18n="viewer.title">iCast</h1>
     <form id="auth-form">
       <input type="text" id="password-input" placeholder="Enter password" autocomplete="off" autofocus aria-label="Stream password" data-i18n-placeholder="viewer.auth.passwordPh" data-i18n-aria-label="viewer.auth.passwordAria">
       <button type="submit" id="auth-submit" class="btn-cta">Connect</button>

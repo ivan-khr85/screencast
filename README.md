@@ -1,4 +1,4 @@
-# Screencast
+# iCast
 
 Stream your macOS screen (and system audio) to friends via browser in real time. No accounts, no cloud — just a URL and a password.
 

@@ -124,7 +124,7 @@
     }
   },
   "viewer": {
-    "title": "Трансляція екрана",
+    "title": "iCast",
     "auth": {
       "passwordPh": "Введіть пароль",
       "passwordAria": "Пароль трансляції",

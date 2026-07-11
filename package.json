@@ -1,11 +1,11 @@
 {
-  "name": "screencast",
-  "version": "3.4.0",
+  "name": "icast",
+  "version": "3.5.0",
   "description": "Stream your macOS screen + audio to friends via browser",
   "author": "Ivan Khr",
   "main": "dist/electron/main.cjs",
   "bin": {
-    "screencast": "./dist/bin/cli.js"
+    "icast": "./dist/bin/cli.js"
   },
   "type": "module",
   "scripts": {
@@ -25,8 +25,8 @@
     "node": ">=20.0.0"
   },
   "build": {
-    "appId": "com.screencast.app",
-    "productName": "Screencast",
+    "appId": "com.icast.app",
+    "productName": "iCast",
     "directories": {
       "output": "release"
     },

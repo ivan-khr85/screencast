@@ -26,7 +26,7 @@ interface CliOptions {
 }
 
 program
-  .name('screencast')
+  .name('icast')
   .description('Stream your macOS screen + audio to friends via browser')
   .option('--port <number>', 'Server port', String(DEFAULTS.port))
   .option('--fps <number>', 'Frames per second', String(DEFAULTS.fps))

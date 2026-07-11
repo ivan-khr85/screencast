@@ -4,7 +4,7 @@
   'use strict';
   const { els, t, state } = window.App;
 
-  const LANG_KEY = 'screencast:lang';
+  const LANG_KEY = 'icast:lang';
 
   // --- Advanced settings (gear in the titlebar + ghost button both toggle) ---
 

@@ -3,7 +3,7 @@
   'use strict';
   const { els, t, state } = window.App;
 
-  const SETTINGS_KEY = 'screencast:settings';
+  const SETTINGS_KEY = 'icast:settings';
 
   // --- Persistence ---
 

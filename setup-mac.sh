@@ -2,8 +2,8 @@
 set -euo pipefail
 
 echo ""
-echo "  Screencast - macOS Setup"
-echo "  ========================"
+echo "  iCast - macOS Setup"
+echo "  ==================="
 echo ""
 
 # --- Node.js ---

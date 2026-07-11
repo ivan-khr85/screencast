@@ -29,7 +29,7 @@
   // Ukrainian; everything else falls back to English.
   window.pickLanguage = function (systemLocale) {
     try {
-      const saved = localStorage.getItem('screencast:lang');
+      const saved = localStorage.getItem('icast:lang');
       if (saved === 'en' || saved === 'uk') return saved;
     } catch {}
     return String(systemLocale || '').toLowerCase().startsWith('uk') ? 'uk' : 'en';

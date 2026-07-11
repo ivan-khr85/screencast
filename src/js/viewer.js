@@ -7,8 +7,8 @@
 (function() {
   const RECONNECT_DELAYS = [1000, 2000, 4000, 8000];
   const MAX_RECONNECT_ATTEMPTS = 10;
-  const PREFS_KEY = 'screencast:viewer';
-  const LANG_KEY = 'screencast:lang';
+  const PREFS_KEY = 'icast:viewer';
+  const LANG_KEY = 'icast:lang';
   const t = (key, opts) => i18next.t(key, opts);
 
   const authScreen = document.getElementById('auth-screen');

@@ -1,7 +1,7 @@
 (function() {
   let streaming = false;
-  const SETTINGS_KEY = 'screencast:settings';
-  const LANG_KEY = 'screencast:lang';
+  const SETTINGS_KEY = 'icast:settings';
+  const LANG_KEY = 'icast:lang';
   const t = (key, opts) => i18next.t(key, opts);
 
   const els = {
